@@ -2,6 +2,8 @@ import "dotenv/config";
 import { viewAsGuard } from "./middleware/viewAs.js"; // first: registers the read-only plugin before models compile
 import express    from "express";
 import cors       from "cors";
+import mongoose   from "mongoose";
+import { allowedOrigins, healthBody } from "./config/deploy.js";
 import cron       from "node-cron";
 import rateLimit  from "express-rate-limit";
 import path       from "path";
@@ -61,11 +63,12 @@ if (!process.env.JWT_SECRET) {
 const app        = express();
 const httpServer = createServer(app);
 const PORT       = process.env.PORT || 3001;
+const ALLOWED_ORIGINS = allowedOrigins(); // CLIENT_URL, comma separated (deploy)
 
 // ── Socket.IO ─────────────────────────────────────────────────────────────────
 const io = new Server(httpServer, {
   cors: {
-    origin:      process.env.CLIENT_ORIGIN || "http://localhost:5173",
+    origin:      ALLOWED_ORIGINS,
     credentials: true,
   },
 });
@@ -237,7 +240,7 @@ io.on("connection", (socket) => {
 // ── Middleware ────────────────────────────────────────────────────────────────
 app.use(
   cors({
-    origin:      process.env.CLIENT_ORIGIN || "http://localhost:5173",
+    origin:      ALLOWED_ORIGINS,
     credentials: true,
   })
 );
@@ -264,9 +267,7 @@ app.use("/api/auth/reset-password",  authLimiter);
 app.use("/api", viewAsGuard);
 
 // ── Routes ────────────────────────────────────────────────────────────────────
-app.get("/api/health", (_req, res) => {
-  res.json({ status: "ok", timestamp: new Date().toISOString() });
-});
+app.get("/api/health", (_req, res) => res.json(healthBody(mongoose.connection.readyState)));
 
 app.use("/api/auth",          authRoutes);
 app.use("/api/org",           orgRoutes);
@@ -340,8 +341,8 @@ async function start() {
   // Flag stale emergency suspensions every hour
   cron.schedule("0 * * * *", () => flagStaleSuspensions().catch((e) => console.error("[suspend-cron]", e.message)));
 
-  httpServer.listen(PORT, () => {
-    console.log(`[Server] Listening on http://localhost:${PORT}`);
+  httpServer.listen(PORT, "0.0.0.0", () => {
+    console.log(`[Server] Listening on 0.0.0.0:${PORT}`);
   });
 }
 
