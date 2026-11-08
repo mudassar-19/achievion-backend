@@ -206,9 +206,9 @@ export async function setupDirector(req, res) {
     }], { session });
 
     await ChatChannel.insertMany([
-      { orgId: org._id, name: "general",       type: "channel", isDefault: true, createdBy: director._id },
-      { orgId: org._id, name: "announcements", type: "channel", isDefault: true, createdBy: director._id },
-      { orgId: org._id, name: "random",        type: "channel", isDefault: true, createdBy: director._id },
+      { orgId: org._id, name: "general",       type: "general", isDefault: true, createdBy: director._id },
+      { orgId: org._id, name: "announcements", type: "general", isDefault: true, createdBy: director._id },
+      { orgId: org._id, name: "random",        type: "general", isDefault: true, createdBy: director._id },
     ], { session });
 
     await AuditLog.create([{

@@ -47,7 +47,7 @@ export async function createTeam(req, res) {
         orgId:      req.user.orgId,
         name:       channelName,
         department: department || "",
-        type:       "channel",
+        type:       "team",
         createdBy:  req.user._id,
       },
     },
