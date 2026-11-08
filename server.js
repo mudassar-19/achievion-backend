@@ -61,6 +61,8 @@ if (!process.env.JWT_SECRET) {
 
 // ── App setup ─────────────────────────────────────────────────────────────────
 const app        = express();
+// Behind a proxy (Render: TRUST_PROXY=1) the client IP comes from X-Forwarded-For, so the rate limits count per user, not per proxy.
+if (process.env.TRUST_PROXY) app.set("trust proxy", Number(process.env.TRUST_PROXY));
 const httpServer = createServer(app);
 const PORT       = process.env.PORT || 3001;
 const ALLOWED_ORIGINS = allowedOrigins(); // CLIENT_URL, comma separated (deploy)

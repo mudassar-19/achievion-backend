@@ -22,6 +22,7 @@ Tests: `npm test`. Some tests import shared utils from the frontend repo
 | `CLIENT_URL` | Frontend origins allowed by CORS and Socket.IO, comma separated (e.g. `https://achievion.vercel.app`). Default `http://localhost:5173` |
 | `CLIENT_ORIGIN` | Older single-origin name, used only when `CLIENT_URL` is empty |
 | `NODE_ENV` | `development` / `production` |
+| `TRUST_PROXY` | Number of proxies in front of the server; set `1` on Render so rate limits see the real client IP. Leave empty locally |
 | `JWT_SECRET`, `JWT_EXPIRES_IN` | Login token signing and lifetime |
 | `SURVEY_HMAC_SECRET` | Signs anonymous survey links |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_USER`, `SMTP_PASS`, `MAIL_FROM` | Password-reset email |
@@ -33,6 +34,6 @@ Tests: `npm test`. Some tests import shared utils from the frontend repo
 
 1. New **Web Service** from this repo, branch `main`, runtime Node.
 2. Build command `npm ci`, start command `npm start`. Health check path `/api/health` (no login; returns the DB state).
-3. Add the environment variables above (at least `MONGO_URI`, `JWT_SECRET`, `SURVEY_HMAC_SECRET`, `CLIENT_URL`, `NODE_ENV=production`). Render sets `PORT` itself; the server listens on `0.0.0.0:$PORT`.
+3. Add the environment variables above (at least `MONGO_URI`, `JWT_SECRET`, `SURVEY_HMAC_SECRET`, `CLIENT_URL`, `NODE_ENV=production`, `TRUST_PROXY=1`). Render sets `PORT` itself; the server listens on `0.0.0.0:$PORT`.
 4. Render's disk is wiped on every deploy: set the Cloudinary variables for submission files. Project / task attachments are still stored on local disk (see the notes in the deploy check).
 5. In MongoDB Atlas, allow Render's outbound IPs (or `0.0.0.0/0`) under Network Access.
