@@ -9,6 +9,10 @@ import Organization  from "../models/Organization.js";
 
 export async function seedCommunities() {
   try {
+    // The old schema had only type "channel"; it is no longer a valid type, so saving such a channel failed. Idempotent.
+    const fixed = await ChatChannel.updateMany({ type: "channel" }, { $set: { type: "general" } });
+    if (fixed.modifiedCount) console.log(`[seedCommunities] ${fixed.modifiedCount} old "channel" type(s) set to "general".`);
+
     // Find all orgs that have orphaned channels (non-DM, no communityId)
     const orphaned = await ChatChannel.find({
       communityId: null,
