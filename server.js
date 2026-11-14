@@ -5,7 +5,7 @@ import cors       from "cors";
 import mongoose   from "mongoose";
 import { allowedOrigins, healthBody } from "./config/deploy.js";
 import cron       from "node-cron";
-import rateLimit  from "express-rate-limit";
+import rateLimit, { ipKeyGenerator } from "express-rate-limit";
 import path       from "path";
 import { createServer } from "http";
 import jwt from "jsonwebtoken";
@@ -258,15 +258,33 @@ app.use("/uploads", requireSignedFile, express.static(path.resolve(process.cwd()
 app.use("/uploads", (_req, res) => res.status(404).json({ error: "This file is no longer stored on the server. Upload it again.", code: "file_missing" }));
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
-const authLimiter = rateLimit({
+// Only failed requests count for login limiters (skipSuccessfulRequests: true).
+// Key = email+IP so 30 users from the same Wi-Fi with correct passwords are never blocked.
+// A second IP-only limiter (ceiling 200/15 min) catches one IP trying many accounts.
+const authEmailIpLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max:      20,
-  message:  { error: "Too many attempts. Try again in 15 minutes." },
+  max: 10,
+  skipSuccessfulRequests: true,
+  keyGenerator: (req) => `${(req.body?.email ?? "").toLowerCase().trim()}:${ipKeyGenerator(req)}`,
+  message: { error: "Too many failed login attempts. Try again in 15 minutes." },
 });
-app.use("/api/auth/login", authLimiter);
-app.use("/api/org/login",  authLimiter);
-app.use("/api/auth/forgot-password", authLimiter);
-app.use("/api/auth/reset-password",  authLimiter);
+const authIpLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 200,
+  skipSuccessfulRequests: true,
+  message: { error: "Too many login attempts from this IP. Try again in 15 minutes." },
+});
+// Forgot/reset-password: keyed by email+IP, counts all requests (endpoint always 200 for security)
+const forgotPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  keyGenerator: (req) => `fp:${(req.body?.email ?? "").toLowerCase().trim()}:${ipKeyGenerator(req)}`,
+  message: { error: "Too many password reset requests. Try again in 15 minutes." },
+});
+app.use("/api/auth/login",           authEmailIpLimiter, authIpLimiter);
+app.use("/api/org/login",            authEmailIpLimiter, authIpLimiter);
+app.use("/api/auth/forgot-password", forgotPasswordLimiter);
+app.use("/api/auth/reset-password",  forgotPasswordLimiter);
 
 // View as (D-109): before every route — view-as tokens only GET, and those GETs cannot write.
 app.use("/api", viewAsGuard);

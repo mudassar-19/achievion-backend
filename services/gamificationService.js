@@ -648,6 +648,19 @@ async function applyTaskRejected({ taskId, orgId, reason }) {
   }
 }
 
+// ── Inline streak increment (UC-12) ─────────────────────────────────────────
+// Called at task approval time. Idempotent via lastStreakDate: a user who already
+// had a task approved today won't get a second increment.
+export async function inlineStreakIncrement(userIds, orgId, now = new Date()) {
+  const today = new Date(now); today.setHours(0, 0, 0, 0);
+  const ids = Array.isArray(userIds) ? userIds : [userIds];
+  return GamificationProfile.updateMany(
+    { userId: { $in: ids }, orgId,
+      $or: [{ lastStreakDate: null }, { lastStreakDate: { $lt: today } }] },
+    { $inc: { "streaks.daily": 1 }, $set: { lastStreakDate: today } }
+  );
+}
+
 // ── Daily streak cron ─────────────────────────────────────────────────────────
 // Streak only counts Mon–Fri. On weekends the cron still runs HP regen but
 // does NOT break or advance streaks — working-day inactivity required to reset.
