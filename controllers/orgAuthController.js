@@ -74,7 +74,7 @@ function clientError(res, status, message) {
 export async function registerOrg(req, res) {
   const { orgName, adminEmail, password } = req.body ?? {};
 
-  if (!orgName?.trim())     return clientError(res, 400, "Organisation name is required.");
+  if (!orgName?.trim())     return clientError(res, 400, "Organization name is required.");
   if (!adminEmail?.trim())  return clientError(res, 400, "Admin email is required.");
   if (!/\S+@\S+\.\S+/.test(adminEmail)) return clientError(res, 400, "Enter a valid email.");
   if (!password)            return clientError(res, 400, "Password is required.");
@@ -82,7 +82,7 @@ export async function registerOrg(req, res) {
     return clientError(res, 400, `Password must be at least ${PASSWORD_MIN} characters.`);
 
   const existing = await Organization.findOne({ adminEmail: adminEmail.toLowerCase().trim() });
-  if (existing) return clientError(res, 409, "An organisation with this email already exists.");
+  if (existing) return clientError(res, 409, "An organization with this email already exists.");
 
   const session = await mongoose.startSession();
   session.startTransaction();
@@ -120,7 +120,7 @@ export async function registerOrg(req, res) {
   } catch (err) {
     await session.abortTransaction().catch(() => {});
     session.endSession();
-    if (err.code === 11000) return clientError(res, 409, "An organisation with this email already exists.");
+    if (err.code === 11000) return clientError(res, 409, "An organization with this email already exists.");
     console.error("[registerOrg] error:", err.message);
     return res.status(500).json({ success: false, error: err.message });
   }
@@ -141,7 +141,7 @@ export async function loginOrg(req, res) {
     const match = org ? await bcrypt.compare(password, org.passwordHash) : false;
 
     if (!org || !match) return clientError(res, 401, "Invalid email or password.");
-    if (org.status === "suspended") return clientError(res, 403, "This organisation account has been suspended.");
+    if (org.status === "suspended") return clientError(res, 403, "This organization account has been suspended.");
 
     const token = signOrgToken(org);
     return res.json({ success: true, data: { token, org: sanitizeOrg(org) } });
@@ -161,7 +161,7 @@ export async function setupDirector(req, res) {
   if (!/\S+@\S+\.\S+/.test(directorEmail)) return clientError(res, 400, "Enter a valid director email.");
 
   const org = await Organization.findOne({ orgId: req.org.orgId });
-  if (!org) return clientError(res, 404, "Organisation not found.");
+  if (!org) return clientError(res, 404, "Organization not found.");
   if (org.directorSetupComplete) return clientError(res, 409, "Director has already been set up.");
 
   const existingUser = await User.findOne({ email: directorEmail.toLowerCase().trim() });
@@ -247,7 +247,7 @@ export async function setupDirector(req, res) {
 // ── GET /api/org/me ───────────────────────────────────────────────────────────
 export async function getOrgMe(req, res) {
   const org = await Organization.findOne({ orgId: req.org.orgId });
-  if (!org) return clientError(res, 404, "Organisation not found.");
+  if (!org) return clientError(res, 404, "Organization not found.");
   return res.json({ success: true, data: { org: sanitizeOrg(org) } });
 }
 
@@ -258,8 +258,8 @@ export async function validateInvite(req, res) {
 
   const code = orgId.trim().toUpperCase();
   const org = await Organization.findOne({ $or: [{ orgCode: code }, { orgId: code }] });
-  if (!org) return clientError(res, 404, "No organisation found with that invite code.");
-  if (org.status === "suspended") return clientError(res, 403, "This organisation account has been suspended.");
+  if (!org) return clientError(res, 404, "No organization found with that invite code.");
+  if (org.status === "suspended") return clientError(res, 403, "This organization account has been suspended.");
 
   return res.json({ success: true, data: { valid: true, orgName: org.name, orgId: org.orgId } });
 }

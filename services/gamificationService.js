@@ -662,9 +662,10 @@ export async function updateDailyStreaks(now = new Date()) {
     });
 
     if (activeUserIds.length > 0) {
+      // collab streak still incremented by cron; daily streak is now incremented inline on approval
       await GamificationProfile.updateMany(
         { userId: { $in: activeUserIds } },
-        { $inc: { "streaks.daily": 1, "streaks.collab": 1 } }
+        { $inc: { "streaks.collab": 1 } }
       );
     }
 

@@ -22,7 +22,7 @@ function audit(orgId, userId, action, detail) {
 // GET /api/director/settings/custom-roles
 export async function listCustomRoles(req, res) {
   const org = await Organization.findOne(orgFilter(req.user.orgId), "customRoles").lean();
-  if (!org) return res.status(404).json({ error: "Organisation not found." });
+  if (!org) return res.status(404).json({ error: "Organization not found." });
   res.json({ customRoles: org.customRoles ?? [] });
 }
 
@@ -34,7 +34,7 @@ export async function addCustomRole(req, res) {
   if (!CATEGORIES.includes(category)) return res.status(400).json({ error: `category must be one of: ${CATEGORIES.join(", ")}.` });
 
   const org = await Organization.findOne(orgFilter(req.user.orgId));
-  if (!org) return res.status(404).json({ error: "Organisation not found." });
+  if (!org) return res.status(404).json({ error: "Organization not found." });
 
   const active = (org.customRoles ?? []).filter((r) => r.active);
   if (active.length >= MAX_ROLES) return res.status(409).json({ error: `Maximum ${MAX_ROLES} custom roles allowed.` });
@@ -55,7 +55,7 @@ export async function addCustomRole(req, res) {
 export async function updateCustomRole(req, res) {
   const { key } = req.params;
   const org = await Organization.findOne(orgFilter(req.user.orgId));
-  if (!org) return res.status(404).json({ error: "Organisation not found." });
+  if (!org) return res.status(404).json({ error: "Organization not found." });
 
   const idx = (org.customRoles ?? []).findIndex((r) => r.key === key);
   if (idx === -1) return res.status(404).json({ error: "Custom role not found." });
@@ -79,7 +79,7 @@ export async function updateCustomRole(req, res) {
 export async function deactivateCustomRole(req, res) {
   const { key } = req.params;
   const org = await Organization.findOne(orgFilter(req.user.orgId));
-  if (!org) return res.status(404).json({ error: "Organisation not found." });
+  if (!org) return res.status(404).json({ error: "Organization not found." });
 
   const idx = (org.customRoles ?? []).findIndex((r) => r.key === key);
   if (idx === -1) return res.status(404).json({ error: "Custom role not found." });
@@ -100,10 +100,10 @@ export async function setUserRoleLabel(req, res) {
   if (lab !== null && (lab.length < 2 || lab.length > 40)) return res.status(400).json({ error: "Label must be 2–40 characters or null to clear." });
 
   const org = await Organization.findOne(orgFilter(req.user.orgId), "_id").lean();
-  if (!org) return res.status(404).json({ error: "Organisation not found." });
+  if (!org) return res.status(404).json({ error: "Organization not found." });
 
   const user = await User.findOne({ _id: userId, orgId: String(org._id) });
-  if (!user) return res.status(404).json({ error: "User not found in this organisation." });
+  if (!user) return res.status(404).json({ error: "User not found in this organization." });
 
   user.roleLabel = lab;
   await user.save();

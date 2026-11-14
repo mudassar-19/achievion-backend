@@ -31,7 +31,7 @@ export async function buildReportXlsx(doc, { orgName = "", aiSummary, generatedB
     r.getCell(1).font = { bold: true };
   };
 
-  if (orgName) addRow("Organisation", orgName);
+  if (orgName) addRow("Organization", orgName);
   addRow("Report", doc.title ?? "");
   if (doc.filters) addRow("Period / scope", doc.filters);
   addRow("Generated", new Date().toISOString().slice(0, 16).replace("T", " ") + " UTC");

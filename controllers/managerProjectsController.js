@@ -189,7 +189,7 @@ export async function addMember(req, res) {
   const loaded = await loadProject(req, res, "_id title members");
   if (!loaded) return;
   const user = await orgMember(req.user.orgId, req.body?.userId);
-  if (!user) return res.status(400).json({ error: "Pick a team member from your organisation." });
+  if (!user) return res.status(400).json({ error: "Pick a team member from your organization." });
   if ((loaded.project.members ?? []).some((m) => String(m) === String(user._id))) return res.status(409).json({ error: `${user.name} is already on this project.` });
   await Project.updateOne({ _id: loaded.project._id }, { $addToSet: { members: user._id } });
   audit(loaded.org, req, loaded.project, "project_member_added", `${user.name} (${user.role}) added to "${loaded.project.title}".`, { targetUserId: user._id });

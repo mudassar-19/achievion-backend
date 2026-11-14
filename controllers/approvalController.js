@@ -24,7 +24,7 @@ export async function getPendingApprovals(req, res) {
   }
 
   const orgObjectId = await resolveOrgObjectId(req.user.orgId);
-  if (!orgObjectId) return res.status(404).json({ error: "Organisation not found." });
+  if (!orgObjectId) return res.status(404).json({ error: "Organization not found." });
 
   const approvals = await Approval.find({
     orgId:  orgObjectId,
@@ -46,7 +46,7 @@ export async function getApprovalHistory(req, res) {
   }
 
   const orgObjectId = await resolveOrgObjectId(req.user.orgId);
-  if (!orgObjectId) return res.status(404).json({ error: "Organisation not found." });
+  if (!orgObjectId) return res.status(404).json({ error: "Organization not found." });
 
   const filter = { orgId: orgObjectId };
   const { status } = req.query;

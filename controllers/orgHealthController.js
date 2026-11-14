@@ -115,7 +115,7 @@ export async function getDeptDetail(req, res) {
   if (!deptName) return res.status(400).json({ error: "Department name required." });
 
   const org = await Organization.findOne(orgFilter(orgId), "_id workingTime").lean();
-  if (!org) return res.status(404).json({ error: "Organisation not found." });
+  if (!org) return res.status(404).json({ error: "Organization not found." });
   const oid = org._id.toString(); // hex — matches req.user.orgId and API-created Task records
 
   // Members in this department
@@ -158,7 +158,7 @@ export async function getDeptDetail(req, res) {
 export async function listDepartments(req, res) {
   const { orgId } = req.user;
   const org = await Organization.findOne(orgFilter(orgId), "_id").lean();
-  if (!org) return res.status(404).json({ error: "Organisation not found." });
+  if (!org) return res.status(404).json({ error: "Organization not found." });
   const depts = await User.distinct("department", { orgId: org._id.toString(), status: { $ne: "deleted" }, department: { $ne: null } });
   res.json({ departments: depts.filter(Boolean).sort() });
 }

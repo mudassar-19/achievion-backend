@@ -54,7 +54,7 @@ export function dueThisWeek(tasks, now = new Date()) {
 export function reassignBlockers({ task, to, fromId, eligibleTypes, projectMemberIds = null }) {
   const reasons = [];
   if (!REASSIGNABLE.includes(task.status)) reasons.push(`A task that is ${task.status === "Done" ? "done" : "in review"} cannot be reassigned.`);
-  if (!to) { reasons.push("Pick someone from your organisation."); return reasons; }
+  if (!to) { reasons.push("Pick someone from your organization."); return reasons; }
   if (String(to._id) === String(fromId)) reasons.push("That person already has this task.");
   else if ([task.assignee, ...(task.assignees ?? [])].some((a) => a && String(a) === String(to._id))) reasons.push(`${to.name} already works on this task.`);
   if (to.status !== "active") reasons.push(`${to.name}'s account is not active.`);

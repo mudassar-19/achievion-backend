@@ -357,7 +357,7 @@ export async function createProject(req, res) {
   const people = await User.find({ _id: { $in: wanted }, orgId, status: { $ne: "deleted" }, role: { $nin: ["Director", "Manager"] } }, "_id role").lean();
   const isTL = (id) => people.some((u) => String(u._id) === String(id) && u.role === "Team Lead");
   if (!isTL(valid.teamLeadId) || !modTL.every(isTL))
-    return res.status(400).json({ error: "Choose a Team Lead from your organisation.", fields: { teamLeadId: "Choose a Team Lead from your organisation." } });
+    return res.status(400).json({ error: "Choose a Team Lead from your organization.", fields: { teamLeadId: "Choose a Team Lead from your organization." } });
   memberIds = people.map((u) => u._id);
 
   const director = await User.findOne({ orgId, role: "Director" }, "_id").lean();

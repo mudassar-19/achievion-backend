@@ -82,7 +82,7 @@ export async function createSprint(req, res) {
   const scope = await orgScope(req.user.orgId);
   if (!scope) return res.status(404).json({ error: "Organization not found." });
   const project = await Project.findOne({ _id: value.projectId, ...scope.filter, isDeleted: { $ne: true } }, "title status").lean();
-  if (!project) return res.status(400).json({ error: "Choose a project from your organisation.", fields: { projectId: "Choose a project from your organisation." } });
+  if (!project) return res.status(400).json({ error: "Choose a project from your organization.", fields: { projectId: "Choose a project from your organization." } });
   if (CLOSED_PROJECT.includes(project.status)) return res.status(409).json({ error: `"${project.title}" is ${project.status.toLowerCase()}; restore it before planning sprints.` });
 
   const sprint = await Sprint.create({ ...value, projectId: project._id, status: "Planning", orgId: req.user.orgId, createdBy: req.user.id });

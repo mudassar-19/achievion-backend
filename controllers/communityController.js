@@ -168,7 +168,7 @@ export async function addCommunityMembers(req, res) {
   if (!community) return;
   if (!R.isCommunityAdmin(me(req))) return res.status(403).json({ error: "Only the Director or a Manager can add community members." });
   const ids = await orgUserIds(req.user.orgId, req.body?.userIds);
-  if (!ids.length) return res.status(400).json({ error: "Choose at least one person from your organisation." });
+  if (!ids.length) return res.status(400).json({ error: "Choose at least one person from your organization." });
   await addToCommunity(community._id, ids);
   chatAudit(req, "community_member_added", `Added ${ids.length} member(s) to "${community.name}"`, { after: { userIds: ids } });
   res.json({ ok: true });

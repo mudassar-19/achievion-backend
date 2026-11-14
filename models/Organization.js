@@ -18,7 +18,7 @@ const organizationSchema = new Schema(
   {
     name: {
       type:     String,
-      required: [true, "Organisation name is required"],
+      required: [true, "Organization name is required"],
       trim:     true,
     },
 
@@ -66,7 +66,7 @@ const organizationSchema = new Schema(
     },
     // Batch 5 (D4): archived departments keep their members but nobody new can be put in them.
     archivedDepartments: { type: [String], default: [] },
-    // Batch 5 (D7): organisation logo. `file` = name inside uploads/branding (disk) or `url` (Cloudinary).
+    // Batch 5 (D7): organization logo. `file` = name inside uploads/branding (disk) or `url` (Cloudinary).
     logo: {
       file:      { type: String, default: null },
       url:       { type: String, default: null },

@@ -62,7 +62,7 @@ async function resolveOrgEmployee(userId, orgDbId, res) {
   const user = await User.findById(userId);
   if (!user) { clientError(res, 404, "Employee not found."); return null; }
   // user.orgId stores the MongoDB _id string of the org (orgDbId), not the short "ORG-XXX" string
-  if (user.orgId !== orgDbId) { clientError(res, 403, "This employee does not belong to your organisation."); return null; }
+  if (user.orgId !== orgDbId) { clientError(res, 403, "This employee does not belong to your organization."); return null; }
   if (user.status === "deleted") { clientError(res, 410, "This employee account has been deleted."); return null; }
   return user;
 }
@@ -79,7 +79,7 @@ export async function getDashboard(req, res) {
       .sort({ createdAt: -1 }),
   ]);
 
-  if (!org) return clientError(res, 404, "Organisation not found.");
+  if (!org) return clientError(res, 404, "Organization not found.");
 
   const totalMembers  = members.length;
   const activeMembers = members.filter((m) => m.status === "active").length;
@@ -99,7 +99,7 @@ export async function getDashboard(req, res) {
     data: {
       orgName:          org.name,
       orgId:            org.orgId,
-      departments:      org.departments,
+      departments:      [...new Set(members.map(m => m.department).filter(Boolean))],
       companySize:      org.companySize,
       totalMembers,
       activeMembers,
@@ -128,12 +128,12 @@ export async function createEmployee(req, res) {
 
   // Verify org exists
   const org = await Organization.findOne({ orgId });
-  if (!org) return clientError(res, 404, "Organisation not found.");
+  if (!org) return clientError(res, 404, "Organization not found.");
 
   // If a custom label is provided, it must match an active custom role in this org
   if (roleLabel != null) {
     const match = (org.customRoles ?? []).find((r) => r.active && r.label === roleLabel);
-    if (!match) return clientError(res, 400, `roleLabel "${roleLabel}" is not an active custom role in this organisation.`);
+    if (!match) return clientError(res, 400, `roleLabel "${roleLabel}" is not an active custom role in this organization.`);
   }
 
   const normalizedEmail = email.toLowerCase().trim();
@@ -148,7 +148,7 @@ export async function createEmployee(req, res) {
       "payload.email": normalizedEmail,
     }),
   ]);
-  if (existingUser)    return clientError(res, 400, "Email already used in this organisation.");
+  if (existingUser)    return clientError(res, 400, "Email already used in this organization.");
   if (existingPending) return clientError(res, 400, "An approval request for this email is already pending.");
 
   // Hash a generated password so it is ready for the Director to approve + create
@@ -375,7 +375,7 @@ export async function updateEmployeeRole(req, res) {
 
   if (oldRank !== newRank) {
     const org = await Organization.findOne({ orgId: req.org.orgId });
-    if (!org) return clientError(res, 404, "Organisation not found.");
+    if (!org) return clientError(res, 404, "Organization not found.");
 
     const existingRoleChange = await Approval.findOne({
       orgId:            org._id,
@@ -431,7 +431,7 @@ export async function updateEmployeeStatus(req, res) {
 
   // Both suspension and reactivation require Director approval
   const org = await Organization.findOne({ orgId: req.org.orgId });
-  if (!org) return clientError(res, 404, "Organisation not found.");
+  if (!org) return clientError(res, 404, "Organization not found.");
 
   // ── EMERGENCY SUSPEND: immediate lock + Director confirmation item ─────────
   if (status === "suspended" && emergency === true) {
@@ -528,7 +528,7 @@ export async function deleteEmployee(req, res) {
 
   // All employees (including suspended) require Director approval to delete (B-01 fix)
   const org = await Organization.findOne({ orgId });
-  if (!org) return clientError(res, 404, "Organisation not found.");
+  if (!org) return clientError(res, 404, "Organization not found.");
 
   const existingDelete = await Approval.findOne({
     orgId:            org._id,

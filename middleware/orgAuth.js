@@ -15,7 +15,7 @@ export function verifyOrgToken(req, _res, next) {
   const header = req.headers.authorization ?? "";
 
   if (!header.startsWith("Bearer ")) {
-    return next(orgAuthError("Organisation authentication required."));
+    return next(orgAuthError("Organization authentication required."));
   }
 
   const token = header.slice(7).trim();
@@ -40,7 +40,7 @@ export function verifyOrgToken(req, _res, next) {
     const message =
       err.name === "TokenExpiredError"
         ? "Session expired — please log in again."
-        : "Invalid organisation token.";
+        : "Invalid organization token.";
     next(orgAuthError(message));
   }
 }

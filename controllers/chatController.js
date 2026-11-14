@@ -331,7 +331,7 @@ export async function addMember(req, res) {
   if (!group) return;
   if (!R.canManageGroup(group, me(req))) return res.status(403).json({ error: "Only group admins can add members." });
   const ids = await orgUserIds(req.user.orgId, req.body?.userIds);
-  if (!ids.length) return res.status(400).json({ error: "Choose at least one person from your organisation." });
+  if (!ids.length) return res.status(400).json({ error: "Choose at least one person from your organization." });
   await ChatChannel.updateOne({ _id: group._id }, { $addToSet: { memberIds: { $each: ids.map(toOid) } }, $pull: { joinRequests: { $in: ids.map(toOid) } } });
   await addToCommunity(group.communityId, ids);
   chatAudit(req, "group_member_added", `Added ${ids.length} member(s) to "${group.name}"`, { after: { userIds: ids } });

@@ -277,7 +277,7 @@ export async function createTask(req, res) {
       "_id"
     ).lean();
     if (found.length !== assignees.length) {
-      return res.status(400).json({ error: "One or more assignees not found in your organisation." });
+      return res.status(400).json({ error: "One or more assignees not found in your organization." });
     }
   }
 
@@ -677,7 +677,7 @@ export async function submitTask(req, res) {
 
   // D-182 → D-184 (E-3b): the task's own Team Leads (module, else project), else the project's Manager; plus a Senior of the
   // assignee's track who is on the same project (junior → senior review, S-1). Before: a same-department Senior, else the
-  // organisation's first Team Lead, else its first Manager.
+  // organization's first Team Lead, else its first Manager.
   const assignee   = await User.findById(task.assignee ?? userId).lean();
   const seniorRole = assignee ? JUNIOR_SENIOR[assignee.role] : null;
   const { leads, managerId, members } = await taskPeople(task);

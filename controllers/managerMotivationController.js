@@ -45,7 +45,7 @@ async function checkRefs(scope, body) {
     const ok = ref.kind === "user" ? await User.exists({ _id: ref.id, ...org, status: "active", role: { $nin: LEADERS } })
       : ref.kind === "project" ? await Project.exists({ _id: ref.id, ...org, isDeleted: { $ne: true } })
       : ref.kind === "team" ? await Team.exists({ _id: ref.id, ...org }) : null;
-    if (!ok) return { errors: { scopeRef: "Choose from your organisation." } };
+    if (!ok) return { errors: { scopeRef: "Choose from your organization." } };
   }
   if (body.type === "sprint" && valid(body.sprintId)) {
     const sp = await Sprint.findOne({ _id: body.sprintId, ...org, status: { $ne: "Completed" } }, "endDate").lean();

@@ -38,7 +38,7 @@ function orgSnapshot(org) {
 export async function getSettings(req, res) {
   const { orgId } = req.user;
   const org = await Organization.findOne(orgFilter(orgId)).lean();
-  if (!org) return res.status(404).json({ error: "Organisation not found." });
+  if (!org) return res.status(404).json({ error: "Organization not found." });
 
   const wt = org.workingTime ?? {};
   // Safe fallback for docs written before workingDays rename (old field: workDays)
@@ -65,7 +65,7 @@ export async function getSettings(req, res) {
 export async function updateSettings(req, res) {
   const { orgId, id: userId } = req.user;
   const org = await Organization.findOne(orgFilter(orgId));
-  if (!org) return res.status(404).json({ error: "Organisation not found." });
+  if (!org) return res.status(404).json({ error: "Organization not found." });
 
   // Normalize workingTime: accept both workingDays (new) and workDays (old client) field names
   if (req.body.workingTime?.workDays && !req.body.workingTime.workingDays) {
@@ -92,7 +92,7 @@ export async function updateSettings(req, res) {
     } else {
       // Verify the referenced user belongs to this org
       const contact = await User.findOne({ _id: escalationContactId, orgId, status: { $ne: "deleted" } }, "_id").lean();
-      if (!contact) return res.status(400).json({ error: "Escalation contact not found in this organisation." });
+      if (!contact) return res.status(400).json({ error: "Escalation contact not found in this organization." });
       org.escalationContactId = escalationContactId;
     }
   }

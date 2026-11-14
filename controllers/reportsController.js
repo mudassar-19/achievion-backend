@@ -143,7 +143,7 @@ export async function exportReport(req, res) {
         aiSummary = safeAiText(r.text);
       } catch { /* "AI summary not available" */ }
     }
-    const pdf = await buildReportPdf({ title, filters: `Whole organisation · ${rows.length} ${type === "portfolio" ? "projects" : "finished tasks"}`, sections: [{ heading: title, headers, rows: rows.map((r) => r.map(String)) }] },
+    const pdf = await buildReportPdf({ title, filters: `Whole organization · ${rows.length} ${type === "portfolio" ? "projects" : "finished tasks"}`, sections: [{ heading: title, headers, rows: rows.map((r) => r.map(String)) }] },
       { orgName: org.name ?? "", logo: await logoBytes(String(org._id)), charts, aiSummary });
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader("Content-Disposition", `attachment; filename="report-${type}-${new Date().toISOString().slice(0, 10)}.pdf"`);
@@ -152,7 +152,7 @@ export async function exportReport(req, res) {
 
   if (format === "xlsx") {
     const title = `${type.charAt(0).toUpperCase() + type.slice(1)} report`;
-    const doc = { title, filters: `Whole organisation`, sections: [{ heading: title, headers, rows: rows.map((r) => r.map(String)) }] };
+    const doc = { title, filters: `Whole organization`, sections: [{ heading: title, headers, rows: rows.map((r) => r.map(String)) }] };
     const generatedBy = req.user.name ? `${req.user.name} (${req.user.role})` : req.user.role ?? "";
     res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
     res.setHeader("Content-Disposition", `attachment; filename="report-${type}-${new Date().toISOString().slice(0, 10)}.xlsx"`);

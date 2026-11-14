@@ -124,6 +124,13 @@ async function finish(req, res, conditional) {
   const ids = assigneeIds(t);
   Task.logActivity(t._id, req.user.id, "status", { from: "In-Review", to: "Done", note: conditional ? `Conditional, ${v.value.stars}★: ${v.value.reason}` : `${v.value.stars}★` });
   await GamificationProfile.updateOne({ userId: req.user.id }, { $inc: { "stats.reviewsGiven": 1 } });
+  // UC-12: increment daily streak for assignees on first completion of the day (idempotent via lastStreakDate)
+  { const today = new Date(now); today.setHours(0, 0, 0, 0);
+    GamificationProfile.updateMany(
+      { userId: { $in: ids.map(OID) }, orgId: t.orgId,
+        $or: [{ lastStreakDate: null }, { lastStreakDate: { $lt: today } }] },
+      { $inc: { "streaks.daily": 1 }, $set: { lastStreakDate: today } }
+    ).catch((e) => console.error("[streak]", e.message)); }
   // 2.3: check reviewer badges (code_reviewer, the_mentor) on the single award path after every review
   import("../services/gamificationService.js").then(async (m) => {
     const rp = await GamificationProfile.findOne({ userId: req.user.id }).lean();

@@ -1,6 +1,6 @@
 // Batch 5 — Director and shared leftovers: departments (D4, FR12-02), a member's department (N5, FR01-08), skills and
-// phone on the own profile (N4, FR01-06), the organisation logo (D7, FR12-01). Rules: departmentRules.js, brandingRules.js.
-// Everything is scoped to the caller's own organisation (taken from the token, never from the request).
+// phone on the own profile (N4, FR01-06), the organization logo (D7, FR12-01). Rules: departmentRules.js, brandingRules.js.
+// Everything is scoped to the caller's own organization (taken from the token, never from the request).
 import fs from "fs";
 import path from "path";
 import multer from "multer";
@@ -34,11 +34,11 @@ async function departmentList(org) {
 // GET /api/director/departments → { departments: [active names], items: [{ name, members, archived }] }
 export async function listDepartments(req, res) {
   const org = await orgOf(req, "orgId departments archivedDepartments").lean();
-  if (!org) return res.status(404).json({ error: "Organisation not found." });
+  if (!org) return res.status(404).json({ error: "Organization not found." });
   const items = await departmentList(org);
   res.json({ departments: items.filter((d) => !d.archived).map((d) => d.name), items });
 }
-// Names that live only on members become part of the organisation's list the first time the list is changed.
+// Names that live only on members become part of the organization's list the first time the list is changed.
 async function adopt(org) {
   const items = await departmentList(org);
   org.departments = items.filter((d) => !d.archived).map((d) => d.name);
@@ -47,7 +47,7 @@ async function adopt(org) {
 // POST /api/director/departments { name }
 export async function createDepartment(req, res) {
   const org = await orgOf(req, "orgId departments archivedDepartments");
-  if (!org) return res.status(404).json({ error: "Organisation not found." });
+  if (!org) return res.status(404).json({ error: "Organization not found." });
   const v = addDepartment(await adopt(org), req.body?.name);
   if (!v.ok) return fail(res, v);
   org.departments = v.departments;
@@ -58,7 +58,7 @@ export async function createDepartment(req, res) {
 // PATCH /api/director/departments { from, name } → rename; members of the department follow.
 export async function renameDepartmentRoute(req, res) {
   const org = await orgOf(req, "orgId departments archivedDepartments");
-  if (!org) return res.status(404).json({ error: "Organisation not found." });
+  if (!org) return res.status(404).json({ error: "Organization not found." });
   const v = renameDepartment(await adopt(org), req.body?.from, req.body?.name);
   if (!v.ok) return fail(res, v);
   org.departments = v.departments; org.archivedDepartments = v.archivedDepartments;
@@ -70,7 +70,7 @@ export async function renameDepartmentRoute(req, res) {
 // POST /api/director/departments/archive { name, archived } → archived: nobody new can be put in it; members keep it.
 export async function archiveDepartment(req, res) {
   const org = await orgOf(req, "orgId departments archivedDepartments");
-  if (!org) return res.status(404).json({ error: "Organisation not found." });
+  if (!org) return res.status(404).json({ error: "Organization not found." });
   const n = readDepartmentName(req.body?.name);
   if (!n.ok) return fail(res, n);
   if (typeof req.body?.archived !== "boolean") return res.status(400).json({ error: "Say whether to archive or restore.", field: "archived" });
@@ -87,9 +87,9 @@ export async function archiveDepartment(req, res) {
 export async function setMemberDepartment(req, res) {
   if (!mongoose.isValidObjectId(req.params.userId) || !IS_OID.test(req.params.userId)) return res.status(404).json({ error: "Person not found." });
   const org = await orgOf(req, "orgId departments archivedDepartments").lean();
-  if (!org) return res.status(404).json({ error: "Organisation not found." });
+  if (!org) return res.status(404).json({ error: "Organization not found." });
   const member = await User.findOne({ _id: req.params.userId, ...membersOf(org) }, "name role department");
-  if (!member) return res.status(404).json({ error: "Person not found." }); // another organisation's person looks the same as no person
+  if (!member) return res.status(404).json({ error: "Person not found." }); // another organization's person looks the same as no person
   if (member.role === "Director") return res.status(403).json({ error: "A Director's department is not changed here." });
   const v = mayAssign({ ...org, departments: (await departmentList(org)).filter((d) => !d.archived).map((d) => d.name) }, req.body?.department);
   if (!v.ok) return fail(res, v);
@@ -119,7 +119,7 @@ export async function getProfileDetails(req, res) {
   res.json({ skills: user.skills ?? [], phone: req.viewAs ? null : user.phone ?? null }); // the phone is private in View as, like the email (D-218)
 }
 
-// ── Organisation logo (D7) ───────────────────────────────────────────────────
+// ── Organization logo (D7) ───────────────────────────────────────────────────
 const BRANDING_DIR = path.resolve(process.cwd(), "uploads", "branding");
 // Kept in memory first (1 MB at most) so the first bytes are checked before anything is stored.
 const logoUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: LOGO_MAX_BYTES, files: 1 } }).single("logo");
@@ -144,24 +144,24 @@ export async function uploadLogo(req, res) {
   const v = readLogo(req.file);
   if (!v.ok) return res.status(v.status).json({ error: v.error });
   const org = await orgOf(req, "orgId name logo");
-  if (!org) return res.status(404).json({ error: "Organisation not found." });
+  if (!org) return res.status(404).json({ error: "Organization not found." });
   const kept = await store(org, req.file, v);
   org.logo = { ...kept, type: v.type, size: req.file.size, updatedAt: new Date(), updatedBy: req.user.id };
   await org.save();
-  audit(org, req, "org_logo_updated", `Organisation logo changed (${v.type.toUpperCase()}, ${Math.round(req.file.size / 1024)} KB).`);
+  audit(org, req, "org_logo_updated", `Organization logo changed (${v.type.toUpperCase()}, ${Math.round(req.file.size / 1024)} KB).`);
   res.status(201).json({ logo: { type: v.type, updatedAt: org.logo.updatedAt } });
 }
 // DELETE /api/director/branding/logo → back to the default mark. The stored file is left where it is.
 export async function removeLogo(req, res) {
   const org = await orgOf(req, "orgId logo");
-  if (!org) return res.status(404).json({ error: "Organisation not found." });
+  if (!org) return res.status(404).json({ error: "Organization not found." });
   if (!org.logo?.type) return res.json({ logo: null, unchanged: true });
   org.logo = undefined;
   await org.save();
-  audit(org, req, "org_logo_removed", "Organisation logo removed; the default mark is shown.");
+  audit(org, req, "org_logo_removed", "Organization logo removed; the default mark is shown.");
   res.json({ logo: null });
 }
-// The logo's bytes for the caller's own organisation: { buffer, type } or null. Also used by the report PDFs.
+// The logo's bytes for the caller's own organization: { buffer, type } or null. Also used by the report PDFs.
 export async function logoBytes(orgId) {
   const org = await Organization.findOne(IS_OID.test(orgId) ? { _id: orgId } : { orgId }, "logo").lean();
   const l = org?.logo;
@@ -175,12 +175,12 @@ export async function logoBytes(orgId) {
 // GET /api/auth/branding → { orgName, logo: { type, updatedAt } | null } · GET /api/auth/branding/logo → the image
 export async function getBranding(req, res) {
   const org = await orgOf(req, "name logo").lean();
-  if (!org) return res.status(404).json({ error: "Organisation not found." });
+  if (!org) return res.status(404).json({ error: "Organization not found." });
   res.json({ orgName: org.name ?? null, logo: org.logo?.type ? { type: org.logo.type, updatedAt: org.logo.updatedAt } : null });
 }
 export async function getLogo(req, res) {
   const logo = await logoBytes(req.user.orgId);
-  if (!logo) return res.status(404).json({ error: "This organisation has no logo." });
+  if (!logo) return res.status(404).json({ error: "This organization has no logo." });
   res.set({ "Content-Type": LOGO_MIME[logo.type], "X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=300", "Content-Disposition": "inline" });
   res.send(logo.buffer);
 }

@@ -29,6 +29,8 @@ const gpSchema = new Schema(
       quality: { type: Number, default: 0, min: 0 },
       collab:  { type: Number, default: 0, min: 0 },
     },
+    // Date of last daily-streak increment (set inline on approval; cron only resets)
+    lastStreakDate: { type: Date, default: null },
 
     // ── Badges ───────────────────────────────────────────────────────────────
     badges: [

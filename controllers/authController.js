@@ -232,11 +232,11 @@ export async function registerEmployee(req, res) {
   const org = await Organization.findOne({ orgId: orgId.trim().toUpperCase() });
 
   if (!org) {
-    return clientError(res, 404, "No organisation found with that invite code.");
+    return clientError(res, 404, "No organization found with that invite code.");
   }
 
   if (org.status === "suspended") {
-    return clientError(res, 403, "This organisation account has been suspended.");
+    return clientError(res, 403, "This organization account has been suspended.");
   }
 
   // ── Duplicate email check (across all users, not just this org) ─────────────
