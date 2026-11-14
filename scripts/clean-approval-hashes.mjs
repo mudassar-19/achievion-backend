@@ -8,8 +8,15 @@
 // Usage:
 //   node server/scripts/clean-approval-hashes.mjs            # dry-run (counts only)
 //   node server/scripts/clean-approval-hashes.mjs --apply    # unsets payload.password from DECIDED rows
-import "dotenv/config";
 import mongoose from "mongoose";
+import { readFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+for (const l of readFileSync(path.join(root, ".env"), "utf8").split("\n")) {
+  const i = l.indexOf("="); if (i > 0 && !l.startsWith("#") && !process.env[l.slice(0, i)]) process.env[l.slice(0, i)] = l.slice(i + 1);
+}
 
 const APPLY = process.argv.includes("--apply");
 

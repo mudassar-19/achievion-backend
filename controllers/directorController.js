@@ -15,6 +15,8 @@ import mongoose           from "mongoose";
 import { VALID_ROLES }    from "../models/User.js";
 import { awardXp, checkAndAwardBadges, DEFAULT_BADGE_THRESHOLDS, adjustUserXp } from "../services/gamificationService.js";
 import { projectHealth }  from "../services/projectHealth.js";
+import { xpZScore, Z_LIMIT } from "../services/anomalyRules.js";
+import XpLog from "../models/XpLog.js";
 
 // Map a role string to its category label (mirrors ROLE_CATEGORY_MAP)
 function roleToCat(role) {
@@ -785,16 +787,26 @@ export async function adjustXp(req, res) {
 
   try {
     const result = await adjustUserXp({ directorId, userId: target._id, orgId, amount: amt, reason: r, adjustId });
-    // A7: non-blocking anomaly flag for large adjustments (|amount| >= 300)
-    if (!result.duplicate && Math.abs(amt) >= 300) {
-      AuditLog.create({
-        action:       "xp_adjust_flagged",
-        orgId,
-        performedBy:  directorId,
-        targetUserId: target._id,
-        scope:        "anomaly",
-        detail:       `Director XP adjustment of ${amt > 0 ? "+" : ""}${amt} flagged for review (threshold: ±300).`,
-      }).catch(() => {});
+    // A7: non-blocking anomaly detection — statistical outlier (z-score) + fixed threshold
+    if (!result.duplicate) {
+      (async () => {
+        try {
+          const history = (await XpLog.find({ userId: target._id, source: "task_approved" }, "amount").sort({ createdAt: -1 }).limit(30).lean()).map((l) => l.amount);
+          const z = xpZScore(history, Math.abs(amt));
+          const isOutlier = (z !== null && Math.abs(z) > Z_LIMIT) || Math.abs(amt) >= 300;
+          if (!isOutlier) return;
+          const mean = history.length >= 5 ? Math.round(history.reduce((s, v) => s + v, 0) / history.length) : null;
+          await AuditLog.create({
+            action:       "xp_adjust_flagged",
+            orgId,
+            performedBy:  directorId,
+            targetUserId: target._id,
+            scope:        "anomaly",
+            detail:       `Director XP adjustment of ${amt > 0 ? "+" : ""}${amt}${z !== null ? ` (z=${z.toFixed(1)}, mean=${mean})` : " (threshold: ±300)"} flagged for review.`,
+            after:        { amount: amt, z: z !== null ? Math.round(z * 10) / 10 : null, mean, samples: history.length },
+          });
+        } catch (_) { /* non-blocking */ }
+      })();
     }
     res.json(result);
   } catch (err) {
