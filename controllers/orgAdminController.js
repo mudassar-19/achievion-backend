@@ -7,6 +7,7 @@ import Approval          from "../models/Approval.js";
 import Notification      from "../models/Notification.js";
 import Task              from "../models/Task.js";
 import * as approvalSvc  from "../services/approvalService.js";
+import { validateSuspendReason } from "../services/orgAdminRules.js";
 
 // ── Role promotion helper ─────────────────────────────────────────────────────
 const ROLE_RANK = {
@@ -112,7 +113,7 @@ export async function getDashboard(req, res) {
 // ── POST /api/org/employees/create ────────────────────────────────────────────
 export async function createEmployee(req, res) {
   const { orgId, orgDbId } = req.org;
-  const { name, email, role = "Developer", department } = req.body ?? {};
+  const { name, email, role = "Developer", department, roleLabel } = req.body ?? {};
 
   // Validation
   if (!name?.trim() || !email?.trim()) {
@@ -128,6 +129,12 @@ export async function createEmployee(req, res) {
   // Verify org exists
   const org = await Organization.findOne({ orgId });
   if (!org) return clientError(res, 404, "Organisation not found.");
+
+  // If a custom label is provided, it must match an active custom role in this org
+  if (roleLabel != null) {
+    const match = (org.customRoles ?? []).find((r) => r.active && r.label === roleLabel);
+    if (!match) return clientError(res, 400, `roleLabel "${roleLabel}" is not an active custom role in this organisation.`);
+  }
 
   const normalizedEmail = email.toLowerCase().trim();
 
@@ -158,6 +165,7 @@ export async function createEmployee(req, res) {
       email:      normalizedEmail,
       password:   hashedPassword,
       role,
+      roleLabel:  roleLabel ?? null,
       department: department?.trim() || null,
       orgId:      orgDbId,
     },
@@ -476,6 +484,13 @@ export async function updateEmployeeStatus(req, res) {
   const actionType = status === "active" ? "REACTIVATE_EMPLOYEE" : "SUSPEND_EMPLOYEE";
   const label      = status === "active" ? "reactivation"        : "suspension";
 
+  // S-01: reason is required for suspension, 5–300 chars
+  const reason = req.body?.reason;
+  if (actionType === "SUSPEND_EMPLOYEE") {
+    const reasonErr = validateSuspendReason(reason);
+    if (reasonErr) return clientError(res, 400, reasonErr);
+  }
+
   const existingApproval = await Approval.findOne({
     orgId:            org._id,
     actionType,
@@ -491,7 +506,11 @@ export async function updateEmployeeStatus(req, res) {
     actionType,
     requestedBy:      new Types.ObjectId(req.org.orgDbId),
     targetEmployeeId: user._id,
-    payload:          { employeeId: user._id, name: user.name },
+    payload:          {
+      employeeId: user._id,
+      name:       user.name,
+      reason:     actionType === "SUSPEND_EMPLOYEE" ? String(reason).trim() : undefined,
+    },
   });
 
   return res.status(202).json({
@@ -507,20 +526,7 @@ export async function deleteEmployee(req, res) {
   const user = await resolveOrgEmployee(req.params.userId, orgDbId, res);
   if (!user) return;
 
-  // Suspended employees can be hard-deleted directly (already disabled)
-  if (user.status === "suspended") {
-    await User.findByIdAndDelete(user._id);
-    await Organization.updateOne({ orgId }, { $pull: { members: user._id } });
-    await AuditLog.create({
-      action:       "account_deleted",
-      orgId:        new Types.ObjectId(orgDbId),
-      targetUserId: user._id,
-      performedBy:  orgId,
-    });
-    return res.json({ success: true, message: "Suspended employee deleted successfully" });
-  }
-
-  // Active employees — send deletion request for Director approval
+  // All employees (including suspended) require Director approval to delete (B-01 fix)
   const org = await Organization.findOne({ orgId });
   if (!org) return clientError(res, 404, "Organisation not found.");
 
@@ -539,11 +545,61 @@ export async function deleteEmployee(req, res) {
     actionType:       "DELETE_EMPLOYEE",
     requestedBy:      new Types.ObjectId(req.org.orgDbId),
     targetEmployeeId: user._id,
-    payload:          { employeeId: user._id, reason: req.body?.reason || "" },
+    // Store name + role snapshot so S-02 can show them after the user is soft-deleted
+    payload:          { employeeId: user._id, name: user.name, role: user.role, reason: req.body?.reason || "" },
   });
 
   return res.status(202).json({
     success: true,
     message: "Deletion request sent for Director approval",
+  });
+}
+
+// ── GET /api/org/employees/deleted ───────────────────────────────────────────
+export async function listDeletedEmployees(req, res) {
+  const { orgDbId } = req.org;
+  const { search, page = 1, limit = 20 } = req.query;
+
+  const pageNum  = Math.max(1, parseInt(page)  || 1);
+  const limitNum = Math.min(50, Math.max(1, parseInt(limit) || 20));
+  const skip     = (pageNum - 1) * limitNum;
+
+  const filter = {
+    orgId:      new Types.ObjectId(orgDbId),
+    actionType: "DELETE_EMPLOYEE",
+    status:     "APPROVED",
+  };
+
+  const total     = await Approval.countDocuments(filter);
+  const approvals = await Approval.find(filter)
+    .populate("resolvedBy", "name role")
+    .sort({ resolvedAt: -1 })
+    .skip(skip)
+    .limit(limitNum);
+
+  let rows = approvals.map((a) => ({
+    id:          String(a._id),
+    name:        a.payload?.name  ?? "Unknown",
+    role:        a.payload?.role  ?? "Unknown",
+    removedAt:   a.resolvedAt,
+    reason:      a.payload?.reason || null,
+    requestedBy: "Org Admin",
+    approvedBy:  a.resolvedBy ? a.resolvedBy.name : "Director",
+  }));
+
+  if (search?.trim()) {
+    const re = new RegExp(search.trim(), "i");
+    rows = rows.filter((r) => re.test(r.name) || re.test(r.role));
+  }
+
+  return res.json({
+    success: true,
+    data:    rows,
+    meta: {
+      total,
+      page:       pageNum,
+      limit:      limitNum,
+      totalPages: Math.ceil(total / limitNum) || 1,
+    },
   });
 }

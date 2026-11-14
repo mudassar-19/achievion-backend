@@ -55,7 +55,7 @@ import { suggestTask } from "../controllers/aiAssistController.js";
 import * as tw from "../controllers/teamLeadWorkController.js";
 import * as tt from "../controllers/teamLeadTaskController.js";
 import * as tb from "../controllers/teamLeadBreakdownController.js";
-import { projectAttachmentUpload } from "../middleware/upload.js";
+import { attachmentUpload } from "../middleware/upload.js";
 
 const router = Router();
 
@@ -85,7 +85,7 @@ router.post("/tasks/:id/extend",             tw.ownTask, tt.extendTask);
 router.get("/requests",                      tq.listRequests);
 router.post("/requests/extension/:id",       tw.ownTask, tq.decideExtension);
 router.post("/requests/limit/:id",           tq.decideTries);
-router.post("/tasks/:id/attachments",        tw.ownTask, projectAttachmentUpload.array("files", 5), tt.addAttachments);
+router.post("/tasks/:id/attachments",        tw.ownTask, ...attachmentUpload("files", 5), tt.addAttachments);
 router.delete("/tasks/:id/attachments/:attId", tw.ownTask, tt.removeAttachment);
 router.get("/filters",                       tt.listFilters);
 router.post("/filters",                      tt.saveFilter);

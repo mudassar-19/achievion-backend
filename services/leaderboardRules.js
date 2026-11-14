@@ -23,3 +23,12 @@ export function scopesFor(viewerRole) {
   return ["company", "team", "project"];
 }
 export const MIN_PEOPLE = 2; // UC-13 precondition
+
+// Batch 3 (E4, FR06 "equipped avatar … on leaderboards"): the avatar the person equipped on the Avatar page
+// (GamificationProfile.avatarStyle / avatarSeed), else the default robot seeded by their name.
+export const avatarOf = (profile, name) => ({ style: profile?.avatarStyle || "bottts", seed: profile?.avatarSeed || name || "user" });
+// What a leaderboard row may hold: public fields only (never email, HP or settings).
+const PUBLIC = ["userId", "name", "role", "roleLabel", "level", "xp", "rankXp", "totalXp", "monthlyXp", "weeklyXp", "tasksCompleted", "onTimePct", "completionRate", "streak", "isUser", "avatarSeed", "shopEquipped"];
+export function publicRow(row) {
+  return { ...Object.fromEntries(PUBLIC.filter((k) => k in row).map((k) => [k, row[k]])), avatar: avatarOf(row, row.name) };
+}

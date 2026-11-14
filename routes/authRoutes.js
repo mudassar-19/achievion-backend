@@ -1,3 +1,4 @@
+import { getProfileDetails, updateProfileDetails, getBranding, getLogo } from "../controllers/directorOrgController.js";
 import { Router } from "express";
 import { groupsFor, LANDINGS } from "../services/notificationPrefs.js";
 import { isRankable } from "../services/leaderboardRules.js";
@@ -21,6 +22,11 @@ router.get( "/manager-profile-summary", verifyToken, getManagerProfileSummary);
 router.patch("/me",       verifyToken, updateMe);
 router.patch("/password", verifyToken, changePassword);
 router.patch("/settings", verifyToken, updateSettings);
+// Batch 5: own skills and phone (N4), the organisation's name and logo for the header (D7)
+router.get(  "/profile-details", verifyToken, getProfileDetails);
+router.patch("/profile-details", verifyToken, updateProfileDetails);
+router.get(  "/branding",        verifyToken, getBranding);
+router.get(  "/branding/logo",   verifyToken, getLogo);
 // U-1 (D-131): which notification groups and landing pages this role has (the Settings page draws from this).
 router.get("/settings/options", verifyToken, (req, res) => res.json({
   groups: groupsFor(req.user.role).map(({ key, label, desc, locked }) => ({ key, label, desc, locked })),

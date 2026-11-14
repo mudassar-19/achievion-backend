@@ -54,53 +54,102 @@ export const XP_CONFIG = {
   // Level curve: services/xpEngine.js levelFromTotalXp (D-058)
 };
 
-// ── Badge definitions ─────────────────────────────────────────────────────────
+// ── Badge thresholds ──────────────────────────────────────────────────────────
+// Configurable via Director workspace-settings; matched to DEFAULT_GAMIFICATION_RULES.badgeThresholds.
+export const DEFAULT_BADGE_THRESHOLDS = { firstTask: 1, tenTasks: 10, streak7: 7, streak30: 30 };
+
+// ── Badge ID aliases (old IDs that were renamed; holders must not be re-awarded) ──
+// Map: oldId → currentId.  checkAndAwardBadges blocks an award if the user holds
+// either the current id OR any alias that points to it.
+export const BADGE_ID_ALIASES = {
+  legendary_run: "the_legend",
+  pioneer_10x:   "10x_pioneer",
+  punctual:      "speed_demon",
+};
+
+// ── Badge definitions (25 total — single source of truth) ────────────────────
+// Conditions receive (profile, thresholds). No badge may be awarded twice (checked via earnedIds set).
+// IDs are stable — stored in GamificationProfile.badges[].id. Names are display-only (may drift).
 export const BADGE_DEFINITIONS = [
-  { id: "on_fire",      name: "On Fire",       type: "streak",  rarity: "epic",
-    description: "Maintain a 7-day daily streak",         goldReward: 50,
-    condition: (p) => (p.streaks?.daily ?? 0) >= 7 },
+  // ── Streak ───────────────────────────────────────────────────────────────────
+  { id: "consistency_starter", name: "Consistency Starter", type: "streak",  rarity: "common",
+    description: "Maintain a 5-day daily streak",         goldReward: 15,
+    condition: (p) => (p.streaks?.daily ?? 0) >= 5 },
+  { id: "on_fire",      name: "On Fire",       type: "streak",  rarity: "rare",
+    description: "Maintain a streak for streak7 days",   goldReward: 50,
+    condition: (p, t) => (p.streaks?.daily ?? 0) >= (t?.streak7 ?? 7) },
   { id: "unstoppable",  name: "Unstoppable",   type: "streak",  rarity: "epic",
-    description: "Maintain a 30-day daily streak",        goldReward: 100,
-    condition: (p) => (p.streaks?.daily ?? 0) >= 30 },
+    description: "Maintain a streak for streak30 days",  goldReward: 100,
+    condition: (p, t) => (p.streaks?.daily ?? 0) >= (t?.streak30 ?? 30) },
   { id: "the_legend",   name: "The Legend",    type: "streak",  rarity: "legendary",
-    description: "Maintain a 100-day streak",             goldReward: 500,
+    description: "Maintain a 100-day streak",            goldReward: 500,
     condition: (p) => (p.streaks?.daily ?? 0) >= 100 },
-  { id: "sprint_mvp",   name: "Sprint MVP",    type: "task",    rarity: "legendary",
-    description: "Complete 10 tasks",                     goldReward: 100,
-    condition: (p) => (p.stats?.tasksCompleted ?? 0) >= 10 },
+  // ── Tasks ────────────────────────────────────────────────────────────────────
+  { id: "first_quest",  name: "First Quest",   type: "task",    rarity: "common",
+    description: "Complete your first task",             goldReward: 10,
+    condition: (p, t) => (p.stats?.tasksCompleted ?? 0) >= (t?.firstTask ?? 1) },
+  { id: "task_slayer",  name: "Task Slayer",   type: "task",    rarity: "common",
+    description: "Complete 10 tasks",                   goldReward: 25,
+    condition: (p, t) => (p.stats?.tasksCompleted ?? 0) >= (t?.tenTasks ?? 10) },
+  { id: "task_master",  name: "Task Master",   type: "task",    rarity: "rare",
+    description: "Complete 50 tasks",                   goldReward: 100,
+    condition: (p) => (p.stats?.tasksCompleted ?? 0) >= 50 },
+  { id: "century_club", name: "Century Club",  type: "task",    rarity: "epic",
+    description: "Complete 100 tasks",                  goldReward: 250,
+    condition: (p) => (p.stats?.tasksCompleted ?? 0) >= 100 },
   { id: "speed_demon",  name: "Speed Demon",   type: "task",    rarity: "rare",
-    description: "Submit 10 tasks before deadline",       goldReward: 25,
+    description: "Submit 10 tasks before deadline",     goldReward: 25,
     condition: (p) => (p.stats?.onTimeDeliveries ?? 0) >= 10 },
-  { id: "perfectionist", name: "Perfectionist", type: "task",   rarity: "legendary",
-    description: "Complete 5+ tasks with zero late submissions", goldReward: 200,
-    condition: (p) =>
-      (p.stats?.tasksCompleted ?? 0) >= 5 && (p.stats?.lateSubmissions ?? 0) === 0 },
-  { id: "clean_coder",  name: "Clean Coder",   type: "quality", rarity: "rare",
-    description: "Maintain avg quality score 4.5+ over 5+ tasks", goldReward: 25,
-    condition: (p) =>
-      (p.stats?.avgQualityScore ?? 0) >= 4.5 && (p.stats?.tasksCompleted ?? 0) >= 5 },
+  { id: "delivery_master", name: "Delivery Master", type: "task", rarity: "epic",
+    description: "Submit 30 tasks before deadline",     goldReward: 75,
+    condition: (p) => (p.stats?.onTimeDeliveries ?? 0) >= 30 },
+  // ── XP / Level ───────────────────────────────────────────────────────────────
+  { id: "xp_rookie",    name: "XP Rookie",     type: "xp",      rarity: "common",
+    description: "Earn 1,000 total XP",                goldReward: 10,
+    condition: (p) => (p.totalXp ?? 0) >= 1000 },
   { id: "xp_hunter",   name: "XP Hunter",     type: "xp",      rarity: "rare",
-    description: "Earn 5,000 total XP",                   goldReward: 25,
+    description: "Earn 5,000 total XP",                goldReward: 25,
     condition: (p) => (p.totalXp ?? 0) >= 5000 },
   { id: "10x_pioneer",  name: "10x Pioneer",   type: "xp",      rarity: "epic",
-    description: "Earn 10,000 total XP",                  goldReward: 50,
+    description: "Earn 10,000 total XP",               goldReward: 50,
     condition: (p) => (p.totalXp ?? 0) >= 10000 },
-  { id: "the_mentor",   name: "The Mentor",    type: "special", rarity: "rare",
-    description: "Complete 10 task reviews",               goldReward: 25,
-    condition: (p) => (p.stats?.reviewsGiven ?? 0) >= 10 },
-  { id: "early_adopter", name: "Early Adopter", type: "special", rarity: "legendary",
-    description: "Founding member of the organization",    goldReward: 100,
+  { id: "xp_legend",    name: "XP Legend",     type: "xp",      rarity: "legendary",
+    description: "Earn 50,000 total XP",               goldReward: 200,
+    condition: (p) => (p.totalXp ?? 0) >= 50000 },
+  { id: "level_up",     name: "Level Up!",     type: "xp",      rarity: "common",
+    description: "Reach Level 5",                      goldReward: 15,
+    condition: (p) => (p.level ?? 1) >= 5 },
+  { id: "mid_tier",     name: "Mid-Tier",      type: "xp",      rarity: "rare",
+    description: "Reach Level 10",                     goldReward: 50,
+    condition: (p) => (p.level ?? 1) >= 10 },
+  { id: "elite",        name: "Elite",         type: "xp",      rarity: "epic",
+    description: "Reach Level 20",                     goldReward: 100,
+    condition: (p) => (p.level ?? 1) >= 20 },
+  // ── Special ──────────────────────────────────────────────────────────────────
+  { id: "early_adopter", name: "Early Adopter", type: "special", rarity: "epic",
+    description: "Founding member of the organization", goldReward: 100,
     condition: (p) => p.stats?.isFoundingMember === true },
+  { id: "perfectionist", name: "Perfectionist", type: "special", rarity: "legendary",
+    description: "5+ tasks with zero late submissions",  goldReward: 200,
+    condition: (p) => (p.stats?.tasksCompleted ?? 0) >= 5 && (p.stats?.lateSubmissions ?? 0) === 0 },
+  { id: "code_reviewer", name: "Code Reviewer", type: "special", rarity: "common",
+    description: "Review your first submission",         goldReward: 10,
+    condition: (p) => (p.stats?.reviewsGiven ?? 0) >= 1 },
+  { id: "the_mentor",   name: "Mentor",        type: "special", rarity: "rare",
+    description: "Complete 10 task reviews",             goldReward: 25,
+    condition: (p) => (p.stats?.reviewsGiven ?? 0) >= 10 },
+  { id: "silent_killer", name: "Silent Killer", type: "special", rarity: "epic",
+    description: "20 tasks with 0 late submissions",     goldReward: 150,
+    condition: (p) => (p.stats?.tasksCompleted ?? 0) >= 20 && (p.stats?.lateSubmissions ?? 0) === 0 },
+  { id: "clean_coder",  name: "Clean Coder",   type: "quality", rarity: "rare",
+    description: "Avg quality 4.5+ over 5+ tasks",      goldReward: 25,
+    condition: (p) => (p.stats?.avgQualityScore ?? 0) >= 4.5 && (p.stats?.tasksCompleted ?? 0) >= 5 },
   { id: "bug_slayer",   name: "Bug Slayer",    type: "special", rarity: "epic",
-    description: "Fix 10 Bug-type tasks",                  goldReward: 50,
+    description: "Fix 10 Bug-type tasks",                goldReward: 50,
     condition: (p) => (p.stats?.bugsFixed ?? 0) >= 10 },
-  // Legacy
-  { id: "first_quest",  name: "First Quest",   type: "task",    rarity: "common",
-    description: "Complete your first task",               goldReward: 10,
-    condition: (p) => (p.stats?.tasksCompleted ?? 0) >= 1 },
-  { id: "xp_rookie",    name: "XP Rookie",     type: "xp",      rarity: "common",
-    description: "Earn 1,000 total XP",                    goldReward: 10,
-    condition: (p) => (p.totalXp ?? 0) >= 1000 },
+  { id: "sprint_mvp",   name: "Sprint MVP",    type: "task",    rarity: "legendary",
+    description: "Complete 10 tasks",                   goldReward: 100,
+    condition: (p) => (p.stats?.tasksCompleted ?? 0) >= 10 },
 ];
 
 // ── Title definitions ─────────────────────────────────────────────────────────
@@ -177,40 +226,57 @@ export async function recalculateLevel(userId, orgId) {
   }
 }
 
+// ── Shared badge award primitive ──────────────────────────────────────────────
+// Awards a single badge by ID. Respects BADGE_ID_ALIASES (never re-awards if
+// an alias is already held). Returns true if awarded, false if already owned.
+// All badge awards (quest rewards, checkAndAwardBadges) must go through here.
+export async function awardBadgeById(userId, orgId, badgeId) {
+  const def = BADGE_DEFINITIONS.find((b) => b.id === badgeId);
+  if (!def) return false;
+
+  const p = await GamificationProfile.findOne({ userId }).lean();
+  if (!p) return false;
+
+  const earnedIds = new Set((p.badges ?? []).map((b) => b.id).filter(Boolean));
+  if (earnedIds.has(badgeId)) return false;
+
+  // Check aliases: if user already holds an alias for this badge ID, don't re-award
+  const aliasesFor = Object.entries(BADGE_ID_ALIASES).reduce((acc, [old, cur]) => {
+    (acc[cur] = acc[cur] ?? []).push(old); return acc;
+  }, {});
+  if ((aliasesFor[badgeId] ?? []).some((a) => earnedIds.has(a))) return false;
+
+  await GamificationProfile.findOneAndUpdate(
+    { userId },
+    {
+      $push: { badges: { id: def.id, name: def.name, type: def.type, rarity: def.rarity, earnedAt: new Date() } },
+      $inc:  { gold: def.goldReward ?? 10 },
+    }
+  );
+  await _notify(userId, orgId, `Badge Unlocked: "${def.name}"! +${def.goldReward ?? 10} gold`, "badge");
+  const io = getIo();
+  if (io) io.to(`user:${userId}`).emit("badge:unlocked", { badge: { id: def.id, name: def.name, rarity: def.rarity } });
+  return true;
+}
+
 // ── Badge check ───────────────────────────────────────────────────────────────
-export async function checkAndAwardBadges(userId, orgId, profile) {
+export async function checkAndAwardBadges(userId, orgId, profile, orgRules) {
   const p = profile ?? await GamificationProfile.findOne({ userId }).lean();
   if (!p) return;
 
   const earnedIds = new Set((p.badges ?? []).map((b) => b.id).filter(Boolean));
+  const t = { ...DEFAULT_BADGE_THRESHOLDS, ...(orgRules?.badgeThresholds ?? {}) };
+  const aliasesFor = Object.entries(BADGE_ID_ALIASES).reduce((acc, [old, cur]) => {
+    (acc[cur] = acc[cur] ?? []).push(old); return acc;
+  }, {});
 
   for (const def of BADGE_DEFINITIONS) {
     if (earnedIds.has(def.id)) continue;
-    if (!def.condition(p)) continue;
-
-    await GamificationProfile.findOneAndUpdate(
-      { userId },
-      {
-        $push: { badges: {
-          id: def.id, name: def.name, type: def.type,
-          rarity: def.rarity, earnedAt: new Date(),
-        }},
-        $inc: { gold: def.goldReward ?? 10 },
-      }
-    );
-
-    await _notify(
-      userId, orgId,
-      `Badge Unlocked: "${def.name}"! +${def.goldReward ?? 10} gold`,
-      "badge"
-    );
-
-    const io = getIo();
-    if (io) {
-      io.to(`user:${userId}`).emit("badge:unlocked", {
-        badge: { id: def.id, name: def.name, rarity: def.rarity },
-      });
-    }
+    if ((aliasesFor[def.id] ?? []).some((a) => earnedIds.has(a))) continue;
+    if (!def.condition(p, t)) continue;
+    await awardBadgeById(userId, orgId, def.id);
+    // Refresh earnedIds after each award to avoid duplicate emissions in one pass
+    earnedIds.add(def.id);
   }
 }
 
@@ -448,10 +514,10 @@ async function applyTaskApproved({ taskId, assignees, qualityScore = 3, approver
       });
     }
 
-    // Badge + title checks
+    // Badge + title checks (pass orgRules so thresholds are respected)
     const freshProfile = await GamificationProfile.findOne({ userId: uid }).lean();
     const userDoc = await User.findById(uid).lean();
-    await checkAndAwardBadges(uid, orgId, freshProfile);
+    await checkAndAwardBadges(uid, orgId, freshProfile, orgRules);
     await checkAndAwardTitles(uid, orgId, freshProfile, userDoc);
 
     // M-5: challenge progress from the ledger; rewards go through applyQuestReward below.
@@ -463,7 +529,7 @@ async function applyTaskApproved({ taskId, assignees, qualityScore = 3, approver
 // ── Challenge reward (M-5, FR07) ──────────────────────────────────────────────
 // Same path as a task award: ledger row first (unique {userId, questId}), then profile, level, celebration.
 // Returns false when this user already got this quest's reward.
-export async function applyQuestReward({ questId, userId, orgId, xp, gold = 0, title, by = "system" }) {
+export async function applyQuestReward({ questId, userId, orgId, xp, gold = 0, title, rewardBadgeId, by = "system" }) {
   const profile = await getOrCreateProfile(userId, orgId);
   try {
     await XpLog.create({ userId, orgId: profile.orgId ?? null, amount: xp, source: "quest", questId, breakdown: { gold, questTitle: title } });
@@ -487,6 +553,11 @@ export async function applyQuestReward({ questId, userId, orgId, xp, gold = 0, t
   }
   const fresh = await GamificationProfile.findOne({ userId }).lean();
   await checkAndAwardBadges(userId, orgId, fresh);
+
+  if (rewardBadgeId) {
+    await awardBadgeById(userId, orgId, rewardBadgeId);
+  }
+
   return true;
 }
 
@@ -597,23 +668,111 @@ export async function updateDailyStreaks(now = new Date()) {
       );
     }
 
-    // Only reset streak if inactive on a working day
-    await GamificationProfile.updateMany(
-      { userId: { $nin: activeUserIds } },
-      { $set: { "streaks.daily": 0 } }
-    );
+    // Only reset streak if inactive on a working day (D-245: streak freeze protects one miss)
+    const inactiveProfiles = await GamificationProfile.find(
+      { userId: { $nin: activeUserIds }, "streaks.daily": { $gt: 0 } },
+      "userId orgId"
+    ).lean();
+
+    const frozenIds = new Set();
+    await Promise.allSettled(inactiveProfiles.map(async (p) => {
+      const protected_ = await applyStreakFreeze(p.userId, p.orgId);
+      if (protected_) frozenIds.add(String(p.userId));
+    }));
+
+    const toReset = inactiveProfiles.map(p => p.userId).filter(id => !frozenIds.has(String(id)));
+    if (toReset.length > 0) {
+      await GamificationProfile.updateMany(
+        { userId: { $in: toReset } },
+        { $set: { "streaks.daily": 0 } }
+      );
+    }
   }
   // Weekend: no streak change at all (no increment, no reset)
 
   // HP daily regen always runs regardless of day
   await GamificationProfile.updateMany(
     {},
-    [{ $set: { hp: { $min: [XP_CONFIG.HP_MAX, { $add: ["$hp", XP_CONFIG.HP_DAILY_REGEN] }] } } }]
+    [{ $set: { hp: { $min: [XP_CONFIG.HP_MAX, { $add: ["$hp", XP_CONFIG.HP_DAILY_REGEN] }] } } }],
+    { updatePipeline: true }
   );
 
   console.log(`[Gamification] Daily streaks updated. Working day: ${isWorkingDay}`);
   // M-5: streak challenges, expiry and repeats.
   import("./questService.js").then((m) => m.sweepQuests()).catch((e) => console.error("[Gamification] quest sweep:", e.message));
+}
+
+// ── Director manual XP adjust (A3: single award path) ────────────────────────
+// Performs all checks and writes; controller only validates HTTP input + calls this.
+// Returns { ok, duplicate, before, after, applied } or throws.
+export async function adjustUserXp({ directorId, userId, orgId, amount, reason, adjustId }) {
+  // Idempotency check first — a known adjustId bypasses the rate limit
+  if (adjustId) {
+    const existing = await XpLog.findOne({ adjustId: String(adjustId) }).lean();
+    if (existing) return { ok: true, duplicate: true, before: null, after: null };
+  }
+
+  const todayStart = new Date(); todayStart.setHours(0, 0, 0, 0);
+  const todayCount = await XpLog.countDocuments({ userId, source: "adjust", createdAt: { $gte: todayStart } });
+  if (todayCount >= 3) {
+    const e = new Error("Maximum 3 XP adjustments per employee per day."); e.status = 429; throw e;
+  }
+
+  let profile = await GamificationProfile.findOne({ userId });
+  if (!profile) profile = await GamificationProfile.create({ userId, orgId });
+
+  const beforeXp = profile.totalXp ?? 0;
+  const rawAfter = beforeXp + amount;
+  if (rawAfter < 0) {
+    const e = new Error(`Adjustment of ${amount} XP refused: would bring XP below 0 (current: ${beforeXp}).`);
+    e.status = 400; throw e;
+  }
+  const afterXp = rawAfter;
+  const applied = amount;
+
+  try {
+    await XpLog.create({ userId, orgId, amount: applied, source: "adjust", ...(adjustId ? { adjustId: String(adjustId) } : {}) });
+  } catch (err) {
+    if (err?.code === 11000) return { ok: true, duplicate: true, before: null, after: null };
+    throw err;
+  }
+
+  const after = await GamificationProfile.findOneAndUpdate({ userId }, { $inc: xpIncrement(applied, 0) }, { returnDocument: "after" });
+  const lv = levelFromTotalXp(Math.max(0, after?.totalXp ?? 0));
+  await GamificationProfile.updateOne({ userId }, { $set: { level: lv.level, currentXp: lv.currentXp, maxXp: lv.maxXp } });
+
+  const r = String(reason ?? "").trim();
+  AuditLog.create({ action: "xp_adjusted", orgId, performedBy: directorId, targetUserId: userId, scope: "account",
+    detail: `Director manual XP adjust: ${applied > 0 ? "+" : ""}${applied} XP. Reason: ${r}`,
+    before: { totalXp: beforeXp }, after: { totalXp: afterXp } }).catch(() => {});
+
+  const sign = applied >= 0 ? "+" : "";
+  Notification.create({ userId, orgId, message: `Your XP was adjusted by a Director: ${sign}${applied} XP. Reason: "${r.slice(0, 80)}${r.length > 80 ? "…" : ""}"`, type: "xp", isRead: false }).catch(() => {});
+
+  const freshProfile = await GamificationProfile.findOne({ userId }).lean();
+  await checkAndAwardBadges(userId, orgId, freshProfile).catch(() => {});
+
+  const io = getIo();
+  if (io) {
+    io.to(`user:${userId}`).emit("xp:awarded", { xpValue: applied, goldValue: 0, newXpTotal: afterXp, newGold: freshProfile?.gold ?? 0, levelUp: lv.level > (profile.level ?? 1), newLevel: lv.level, newCurrentXp: lv.currentXp, source: "adjust" });
+  }
+
+  return { ok: true, before: beforeXp, after: afterXp, applied };
+}
+
+// ── Streak Freeze (D-245) ─────────────────────────────────────────────────────
+// Called by the streak cron when a user misses a day.
+// Returns true if a freeze was consumed (streak protected), false if no freeze.
+export async function applyStreakFreeze(userId, orgId) {
+  const updated = await GamificationProfile.findOneAndUpdate(
+    { userId, freezeCount: { $gt: 0 } },
+    { $inc: { freezeCount: -1 } },
+    { returnDocument: "after" }
+  );
+  if (!updated) return false;
+  // Notify the user
+  await _notify(userId, orgId, "Your Streak Freeze protected today's streak! 🧊", "streak_freeze").catch(() => {});
+  return true;
 }
 
 // ── Register event listeners ──────────────────────────────────────────────────

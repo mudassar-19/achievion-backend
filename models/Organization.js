@@ -64,6 +64,17 @@ const organizationSchema = new Schema(
       type:    [String],
       default: [],
     },
+    // Batch 5 (D4): archived departments keep their members but nobody new can be put in them.
+    archivedDepartments: { type: [String], default: [] },
+    // Batch 5 (D7): organisation logo. `file` = name inside uploads/branding (disk) or `url` (Cloudinary).
+    logo: {
+      file:      { type: String, default: null },
+      url:       { type: String, default: null },
+      type:      { type: String, enum: ["png", "jpg", "webp"] },
+      size:      { type: Number, default: 0 },
+      updatedAt: { type: Date, default: null },
+      updatedBy: { type: Schema.Types.ObjectId, ref: "User", default: null },
+    },
 
     companySize: {
       type: String,
@@ -123,6 +134,19 @@ const organizationSchema = new Schema(
     gamificationSettings: { type: Schema.Types.Mixed, default: null },
 
     escalationContactId: { type: Types.ObjectId, ref: "User", default: null },
+
+    // D-294 IMPL-5 Part 4: Director-managed custom role labels (max 20).
+    // key = slug (auto-generated), label = display name, category = one of developer|designer|tester,
+    // active = false means deactivated (never hard-deleted). No User.role enum change.
+    customRoles: {
+      type: [{
+        key:      { type: String, required: true },
+        label:    { type: String, required: true, minlength: 2, maxlength: 40 },
+        category: { type: String, required: true, enum: ["developer", "designer", "tester"] },
+        active:   { type: Boolean, default: true },
+      }],
+      default: [],
+    },
 
     // Employee User._id references for this org.
     members: [

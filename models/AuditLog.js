@@ -20,7 +20,9 @@ const auditLogSchema = new Schema(
         "sprint_created", "sprint_started", "sprint_closed", "sprint_updated", "sprint_deleted", "sprint_tasks_changed",
         "resubmission_allowed", "resubmission_declined",
         "task_reassigned", "workload_threshold_changed", "asset_created", "asset_updated", "asset_deleted",
-        "quest_created", "quest_updated", "quest_deleted", "quest_published", "quest_ended", "quest_completed", "quest_repeated",
+        "quest_created", "quest_updated", "quest_deleted", "quest_published", "quest_ended", "quest_completed", "quest_repeated", "quest_joined",
+        // ── Batch 5: departments, member department, logo ──
+        "department_created", "department_renamed", "department_archived", "department_restored", "member_department_changed", "org_logo_updated", "org_logo_removed",
         "flag_raised", "flag_dismissed", "flag_reopened", "flag_confirmed",
         // ── Manager Reports (M-6) ──
         "lesson_created", "lesson_updated", "lesson_deleted", "report_exported",
@@ -49,10 +51,14 @@ const auditLogSchema = new Schema(
         "group_request_approved", "group_request_rejected", "group_join_approved", "group_join_rejected",
         "chat_message_removed", "chat_message_pinned", "chat_message_unpinned",
         // ── V2 Phase 3 · M-8: View as (D-109) ──
-        "view_as_started", "view_as_ended",
+        "view_as_started", "view_as_ended", "view_as_blocked",
         // ── V2 Phase 4 · T-1: Team Lead modules (D-115) ──
         "module_accepted", "module_qa_ready", "breakdown_applied",
         "task_review_approved", "task_conditional_approved", "task_review_revision", "task_qa_signoff",
+        // ── IMPL-5 Part 4: Custom roles ──────────────────────────────────────
+        "custom_role_added", "custom_role_updated", "custom_role_deactivated", "user_role_label_set",
+        // ── IMPL-5 Part 5: Asset booking ─────────────────────────────────────
+        "asset_booked", "asset_booking_cancelled",
       ],
       trim: true,
     },

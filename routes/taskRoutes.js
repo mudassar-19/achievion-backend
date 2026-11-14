@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { signOff } from "../controllers/qualityController.js";
 import { verifyToken, requireRole } from "../middleware/authMiddleware.js";
-import { upload } from "../middleware/upload.js";
+import { upload, needStorage } from "../middleware/upload.js";
 import * as taskCtrl from "../controllers/taskController.js";
 import { ownTask, ownProject, deletableTask } from "../controllers/teamLeadWorkController.js";
 import { isEmployee } from "../services/accessRules.js";
@@ -40,7 +40,7 @@ router.patch("/:id",            mgmt, notManager,        taskCtrl.updateTask);
 router.patch("/:id/status", notManager,                  taskCtrl.updateTaskStatus);
 
 // ── Submission & review ───────────────────────────────────────────────────────
-router.post("/:id/submit",  upload.array("files", 5), taskCtrl.submitTask);
+router.post("/:id/submit",  needStorage, upload.array("files", 5), taskCtrl.submitTask);
 router.post("/:id/review", notManager,                            taskCtrl.reviewTask);
 
 // ── Legacy approve / reject — Manager + Team Lead only (Director removed) ────

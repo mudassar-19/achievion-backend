@@ -46,7 +46,7 @@ export function nextPeriod(quest, now = new Date()) {
 }
 
 // Create / edit form. `locked` = the quest is active: metric, target, scope and rewards stay as published.
-export function validateQuestInput(body = {}, { cap = DEFAULT_CAP, locked = false } = {}) {
+export function validateQuestInput(body = {}, { cap = DEFAULT_CAP, locked = false, validBadgeIds = null } = {}) {
   const errors = {}, value = {};
   const title = String(body.title ?? "").trim();
   if (title.length < 3 || title.length > 80) errors.title = "Give the challenge a title (3–80 characters)."; // U-1 (D-130)
@@ -89,6 +89,13 @@ export function validateQuestInput(body = {}, { cap = DEFAULT_CAP, locked = fals
   if (!(xp >= 1 && xp <= cap.xp)) errors.rewardXp = `Reward XP must be 1 to ${cap.xp} (the Director's limit).`;
   if (!(gold >= 0 && gold <= cap.gold)) errors.rewardGold = `Reward gold must be 0 to ${cap.gold} (the Director's limit).`;
   value.rewardXp = xp; value.rewardGold = gold;
+  const bid = body.rewardBadgeId ? String(body.rewardBadgeId).trim() : null;
+  if (bid) {
+    if (validBadgeIds && !validBadgeIds.has(bid)) errors.rewardBadgeId = "Unknown badge ID.";
+    else value.rewardBadgeId = bid;
+  } else {
+    value.rewardBadgeId = null;
+  }
   return { errors, value };
 }
 

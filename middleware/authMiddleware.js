@@ -1,3 +1,4 @@
+import { shouldTouch } from "../services/presenceRules.js";
 import jwt  from "jsonwebtoken";
 import User from "../models/User.js";
 
@@ -35,7 +36,7 @@ export async function verifyToken(req, res, next) {
 
   try {
     const dbUser = await User.findById(decoded.id)
-      .select("tokenVersion status orgId role")
+      .select("tokenVersion status orgId role lastSeenAt")
       .lean();
 
     if (!dbUser) return res.status(401).json({ error: "User not found" });
@@ -57,6 +58,9 @@ export async function verifyToken(req, res, next) {
       }
       req.viewAs = decoded.viewAs;
     }
+
+    // X17 (FR01-11): last seen, at most one small write a minute per person; never for a View as visit.
+    if (!decoded.viewAs && shouldTouch(dbUser.lastSeenAt)) User.updateOne({ _id: decoded.id }, { $set: { lastSeenAt: new Date() } }).catch(() => {});
 
     req.user = {
       _id:   decoded.id,

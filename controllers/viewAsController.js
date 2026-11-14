@@ -7,14 +7,25 @@ import Project from "../models/Project.js";
 import AuditLog from "../models/AuditLog.js";
 import { orgScope } from "./managerProjectsController.js";
 import { viewAsBlocker, viewAsClaims, TARGET_ROLES, baseRole, VIEW_AS_MINUTES } from "../services/viewAsRules.js";
+import { ROLE_CATEGORY_MAP } from "../models/User.js";
 
-// Manager's team = members of the projects they manage (Project.managerId), not deleted / archived.
+// Manager's team = members of the projects they manage (Project.managerId).
+// Team Lead's team = members of projects they are listed in (members array).
 async function teamOf(req) {
-  if (req.user.role !== "Manager") return null;
   const scope = await orgScope(req.user.orgId);
   if (!scope) return new Set();
-  const projects = await Project.find({ ...scope.filter, managerId: req.user.id, isDeleted: { $ne: true }, status: { $nin: ["Archived", "Deleted"] } }, "members").lean();
-  return new Set(projects.flatMap((p) => (p.members ?? []).map(String)));
+  const base = { ...scope.filter, isDeleted: { $ne: true }, status: { $nin: ["Archived", "Deleted"] } };
+  if (req.user.role === "Manager") {
+    const projects = await Project.find({ ...base, managerId: req.user.id }, "members").lean();
+    return new Set(projects.flatMap((p) => (p.members ?? []).map(String)));
+  }
+  if (req.user.role === "Team Lead") {
+    const projects = await Project.find({ ...base, members: new mongoose.Types.ObjectId(req.user.id) }, "members").lean();
+    // Exclude the TL themselves — they can only view downward
+    const tlId = String(req.user.id);
+    return new Set(projects.flatMap((p) => (p.members ?? []).map(String)).filter((id) => id !== tlId));
+  }
+  return null;
 }
 const viewerOf = (req) => ({ id: req.user.id, role: req.user.role, orgId: req.user.orgId, viewAs: req.viewAs ?? null });
 const audit = (req, action, viewerId, target, detail) => AuditLog.create({
@@ -25,7 +36,7 @@ const audit = (req, action, viewerId, target, detail) => AuditLog.create({
 export async function candidates(req, res) {
   if (req.viewAs) return res.status(403).json({ error: "You are already viewing as someone. Exit that view first." });
   const roles = TARGET_ROLES[req.user.role];
-  if (!roles) return res.status(403).json({ error: "Only Directors and Managers can use View as." });
+  if (!roles) return res.status(403).json({ error: "Only Directors, Managers, and Team Leads can use View as." });
   const team = await teamOf(req);
   const users = await User.find({ orgId: req.user.orgId, status: "active", _id: { $ne: req.user.id } }, "name role").sort({ name: 1 }).lean();
   const people = users.filter((u) => roles.includes(baseRole(u.role)) && (!team || team.has(String(u._id))))
@@ -37,8 +48,9 @@ export async function candidates(req, res) {
 export async function start(req, res) {
   const targetId = String(req.body?.targetId ?? "");
   const target = mongoose.isValidObjectId(targetId) && /^[0-9a-f]{24}$/i.test(targetId)
-    ? await User.findById(targetId, "name email role roleCategory orgId status tokenVersion").lean() : null;
+    ? await User.findById(targetId, "name email role orgId status tokenVersion").lean() : null;
   const blocked = viewAsBlocker({ viewer: viewerOf(req), target: target && { ...target, id: String(target._id), orgId: String(target.orgId) }, teamIds: await teamOf(req) });
+  if (!blocked && target) target.roleCategory = ROLE_CATEGORY_MAP[target.role] ?? null;
   if (blocked) return res.status(blocked.status).json({ error: blocked.error });
   const viewer = await User.findById(req.user.id, "name role tokenVersion").lean();
   const claims = viewAsClaims({ viewer, target });

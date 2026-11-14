@@ -1,3 +1,4 @@
+import { lastSeenFor } from "../services/presenceRules.js";
 import User               from "../models/User.js";
 import Project            from "../models/Project.js";
 import Task               from "../models/Task.js";
@@ -12,7 +13,8 @@ import ChatChannel        from "../models/ChatChannel.js";
 import ExtensionRequest   from "../models/ExtensionRequest.js";
 import mongoose           from "mongoose";
 import { VALID_ROLES }    from "../models/User.js";
-import { awardXp }        from "../services/gamificationService.js";
+import { awardXp, checkAndAwardBadges, DEFAULT_BADGE_THRESHOLDS, adjustUserXp } from "../services/gamificationService.js";
+import { projectHealth }  from "../services/projectHealth.js";
 
 // Map a role string to its category label (mirrors ROLE_CATEGORY_MAP)
 function roleToCat(role) {
@@ -312,23 +314,40 @@ export async function getTeam(req, res) {
       role:   { $ne: "Director" },   // Directors are not managed here
       _id:    { $ne: directorId },   // Exclude the requesting Director's own account
     },
-    "name email role department status createdAt"
+    "name email role roleLabel department status createdAt skills phone lastSeenAt"
   )
     .sort({ createdAt: -1 })
     .lean();
 
   const memberIds = members.map((m) => m._id);
 
-  const [profiles, taskCountAgg] = await Promise.all([
+  const directorIds = await User.find(
+    { $or: [{ orgId: org._id.toString() }, { orgId: org.orgId }], role: "Director" },
+    "_id"
+  ).lean();
+  const dirIds = directorIds.map((d) => d._id);
+
+  const [profiles, taskCountAgg, orgProjects] = await Promise.all([
     GamificationProfile.find({ userId: { $in: memberIds } }, "userId level currentXp hp").lean(),
     Task.aggregate([
       { $match: { assignees: { $in: memberIds }, status: "Done" } },
       { $group: { _id: { $arrayElemAt: ["$assignees", 0] }, count: { $sum: 1 } } },
     ]),
+    // Org projects with member lists (name + members only, no AI scores)
+    Project.find({ director: { $in: dirIds }, status: { $ne: "Deleted" } }, "title members").lean(),
   ]);
 
   const profileMap = Object.fromEntries(profiles.map((p) => [p.userId.toString(), p]));
   const taskMap    = Object.fromEntries(taskCountAgg.map((t) => [t._id.toString(), t.count]));
+
+  // Build member → projects map
+  const memberProjectsMap = new Map(memberIds.map((id) => [id.toString(), []]));
+  for (const p of orgProjects) {
+    for (const memberId of (p.members ?? [])) {
+      const key = memberId.toString();
+      if (memberProjectsMap.has(key)) memberProjectsMap.get(key).push({ id: p._id, name: p.title });
+    }
+  }
 
   res.json(
     members.map((m) => ({
@@ -336,12 +355,18 @@ export async function getTeam(req, res) {
       name:       m.name,
       email:      m.email,
       role:       m.role,
+      roleLabel:  m.roleLabel ?? null,
       department: m.department,
       status:     m.status,
       level:      profileMap[m._id.toString()]?.level     ?? 1,
       xp:         profileMap[m._id.toString()]?.currentXp ?? 0,
       hp:         profileMap[m._id.toString()]?.hp        ?? 100,
       tasksDone:  taskMap[m._id.toString()] ?? 0,
+      projects:   memberProjectsMap.get(m._id.toString()) ?? [],
+      // Batch 5 (N4, X17): skills and phone from the person's profile; last seen is blank in View as.
+      skills:     m.skills ?? [],
+      phone:      m.phone ?? null,
+      lastSeenAt: lastSeenFor({ role: req.user.role, viewAs: req.viewAs }, m.lastSeenAt),
     }))
   );
 }
@@ -387,6 +412,59 @@ export async function updateTeamMemberRole(req, res) {
   });
 
   res.json({ success: true, role: newRole });
+}
+
+// ── GET /api/director/projects ────────────────────────────────────────────────
+// ── GET /api/director/garden ──────────────────────────────────────────────────
+export async function getGarden(req, res) {
+  const { orgId } = req.user;
+
+  const directorIds = await User.find({ orgId, role: "Director" }, "_id").lean();
+  const dirIds      = directorIds.map((d) => d._id);
+
+  const projects = await Project.find(
+    { director: { $in: dirIds }, status: { $ne: "Deleted" } },
+    "title status startDate deadline"
+  ).lean();
+
+  if (projects.length === 0) {
+    return res.json({ projects: [], onTrackCount: 0, totalCount: 0, onTrackPct: 0 });
+  }
+
+  const projectIds = projects.map((p) => p._id);
+  const taskStats  = await Task.aggregate([
+    { $match: { projectId: { $in: projectIds } } },
+    { $group: {
+      _id:          "$projectId",
+      totalTasks:   { $sum: 1 },
+      doneTasks:    { $sum: { $cond: [{ $eq: ["$status", "Done"] }, 1, 0] } },
+      openTasks:    { $sum: { $cond: [{ $ne: ["$status", "Done"] }, 1, 0] } },
+      overdueTasks: { $sum: { $cond: [
+        { $and: [{ $ne: ["$status", "Done"] }, { $lt: ["$deadline", new Date()] }] },
+        1, 0,
+      ]}},
+    }},
+  ]);
+
+  const statsMap = Object.fromEntries(taskStats.map((s) => [s._id.toString(), s]));
+
+  const result = projects.map((p) => {
+    const s           = statsMap[p._id.toString()] ?? { totalTasks: 0, doneTasks: 0, openTasks: 0, overdueTasks: 0 };
+    const progressPct = s.totalTasks > 0 ? Math.round((s.doneTasks / s.totalTasks) * 100) : 0;
+    const { score, band } = projectHealth({
+      startDate:    p.startDate,
+      deadline:     p.deadline,
+      progressPct,
+      openTasks:    s.openTasks,
+      overdueTasks: s.overdueTasks,
+      totalTasks:   s.totalTasks,
+    });
+    return { id: p._id, title: p.title, status: p.status, healthScore: score, healthBand: band };
+  });
+
+  const onTrackCount = result.filter((p) => p.healthBand === "On track").length;
+  const onTrackPct   = result.length > 0 ? Math.round((onTrackCount / result.length) * 100) : 0;
+  res.json({ projects: result, onTrackCount, totalCount: result.length, onTrackPct });
 }
 
 // ── GET /api/director/projects ────────────────────────────────────────────────
@@ -634,7 +712,22 @@ export async function updateWorkspaceSettings(req, res) {
   const changedFields = [];
   if (name?.trim())                                                { update.name             = name.trim();    changedFields.push("name"); }
   if (companySize)                                                 { update.companySize       = companySize;   changedFields.push("companySize"); }
-  if (gamificationRules && typeof gamificationRules === "object") { update.gamificationRules = gamificationRules; changedFields.push("gamificationRules"); }
+  if (gamificationRules && typeof gamificationRules === "object") {
+    // Validate badgeThresholds when provided
+    const bt = gamificationRules.badgeThresholds;
+    if (bt !== undefined) {
+      const RANGES = { firstTask: [1, 10], tenTasks: [1, 50], streak7: [3, 30], streak30: [7, 90] };
+      for (const [key, [min, max]] of Object.entries(RANGES)) {
+        if (bt[key] !== undefined) {
+          const v = Number(bt[key]);
+          if (!Number.isInteger(v) || v < min || v > max)
+            return res.status(400).json({ error: `badgeThresholds.${key} must be an integer between ${min} and ${max}.` });
+          bt[key] = v;
+        }
+      }
+    }
+    update.gamificationRules = gamificationRules; changedFields.push("gamificationRules");
+  }
 
   if (Object.keys(update).length === 0) return res.status(400).json({ error: "Nothing to update." });
 
@@ -660,6 +753,38 @@ export async function updateWorkspaceSettings(req, res) {
   });
 }
 
+// ── POST /api/director/team/:userId/adjust-xp (D6) ───────────────────────────
+// Director manual XP adjust. Limits: ±500 XP, 3/day/employee, not for Director/Manager,
+// not self. XP cannot go below 0. Idempotent via adjustId.
+export async function adjustXp(req, res) {
+  const { orgId, id: directorId } = req.user;
+  const { userId } = req.params;
+  const { amount, reason, adjustId } = req.body;
+
+  const amt = Number(amount);
+  if (!Number.isInteger(amt) || amt === 0 || Math.abs(amt) > 500)
+    return res.status(400).json({ error: "amount must be a non-zero integer between -500 and 500." });
+  const r = String(reason ?? "").trim();
+  if (r.length < 5 || r.length > 300)
+    return res.status(400).json({ error: "reason must be 5–300 characters." });
+  if (String(userId) === String(directorId))
+    return res.status(403).json({ error: "Directors cannot adjust their own XP." });
+
+  const target = await User.findOne({ _id: userId, orgId }).lean();
+  if (!target) return res.status(404).json({ error: "Employee not found." });
+  if (["Director", "Manager"].includes(target.role))
+    return res.status(403).json({ error: "Directors and Managers do not have XP." });
+  if (target.status !== "active")
+    return res.status(400).json({ error: "Cannot adjust XP for a suspended or deleted employee." });
+
+  try {
+    const result = await adjustUserXp({ directorId, userId: target._id, orgId, amount: amt, reason: r, adjustId });
+    res.json(result);
+  } catch (err) {
+    res.status(err.status ?? 500).json({ error: err.message });
+  }
+}
+
 // ── POST /api/director/reset-gamification ─────────────────────────────────────
 // Blocked: Danger Zone UI removed; re-enable only after owner approval +
 // maker-checker second-Director confirm. When re-enabled, GAMIFICATION_RESET
@@ -676,7 +801,7 @@ export async function getWorkspaceMembers(req, res) {
 
   const members = await User.find(
     { orgId, status: { $ne: "deleted" } },
-    "name email role department status avatarSeed createdAt"
+    "name email role roleLabel department status avatarSeed createdAt"
   )
     .sort({ role: 1, name: 1 })
     .lean();
@@ -686,6 +811,7 @@ export async function getWorkspaceMembers(req, res) {
     name:       m.name,
     email:      m.email,
     role:       m.role,
+    roleLabel:  m.roleLabel ?? null,
     department: m.department ?? "",
     status:     m.status,
     avatarSeed: m.avatarSeed ?? m.name,

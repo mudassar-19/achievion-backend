@@ -1,8 +1,12 @@
 // Manager Reports (V2 Phase 3 · M-6, UX §11): Delivery, People, XP trend, Well-being, Lessons learned,
 // PDF/CSV export. Manager only (route guard) + every project / sprint / member / note inside the caller's org.
 // No AI here: the narrative and "Generate with AI" wait for M-7.
+import { CSV_BOM, csvCell, toCsv } from "../services/csvRules.js";
+import { chartsFor, safeAiText, buildReportPdf } from "../services/reportPdf.js";
+import { buildReportXlsx } from "../services/reportXlsx.js";
+import { logoBytes } from "./directorOrgController.js";
+import { capture } from "../utils/capture.js";
 import mongoose from "mongoose";
-import { createRequire } from "module";
 import Project  from "../models/Project.js";
 import Sprint   from "../models/Sprint.js";
 import Lesson   from "../models/Lesson.js";
@@ -11,8 +15,6 @@ import { orgScope } from "./managerProjectsController.js";
 import { parseReportQuery, validateLesson, exportDoc } from "../services/reportRules.js";
 import { buildDelivery, buildPeople, buildXp, buildWellbeing, buildLessons, lessonView } from "../services/reportService.js";
 
-const _require = createRequire(import.meta.url);
-const PDFDocument = _require("pdfkit");
 const IS_OID = /^[0-9a-f]{24}$/i;
 const SORTS = ["name", "role", "tasksDone", "onTimePct", "avgScore", "rework", "xp"];
 
@@ -76,78 +78,48 @@ export async function exportReport(req, res) {
   if (!ctx) return;
   const data = await BUILD[name](ctx, req);
   if (!data) return res.status(404).json({ error: "That person is not in this team." });
-  return sendExport(req, res, name, data, ctx.scope.org);
+  // Batch 5 (D8, N13, UC-20): the PDF (and its preview) carries the AI summary; null = "AI summary not available".
+  const aiSummary = req.query.format === "csv" ? undefined : await aiSummaryFor(req);
+  return sendExport(req, res, name, data, ctx.scope.org, { aiSummary });
+}
+
+// The Manager's AI report narrative for these filters (cached for the day by managerAiController). Any failure → null.
+async function aiSummaryFor(req) {
+  try {
+    const { reportNarrative } = await import("./managerAiController.js");
+    const query = Object.fromEntries(["project", "sprint", "range", "from", "to"].filter((k) => typeof req.query[k] === "string" && req.query[k]).map((k) => [k, req.query[k]]));
+    const r = await capture(reportNarrative, req, { query });
+    return r.status === 200 ? safeAiText(r.body?.narrative) : null;
+  } catch { return null; }
 }
 
 // Shared with Team Lead Performance (T-5): preview JSON, CSV or PDF of one report tab.
-export function sendExport(req, res, name, data, org) {
-  const format = ["csv", "json"].includes(req.query.format) ? req.query.format : "pdf";
+// extra.aiSummary: text, null ("AI summary not available") or undefined (this report has no AI text, e.g. Team Lead).
+export async function sendExport(req, res, name, data, org, extra = {}) {
+  const format = ["csv", "json", "xlsx"].includes(req.query.format) ? req.query.format : "pdf";
   const doc = exportDoc(name, data);
-  if (format === "json") return res.json({ ...doc, generatedAt: new Date() }); // the preview shows exactly what the file will hold
+  const charts = chartsFor(name, data);
+  if (format === "json") return res.json({ ...doc, generatedAt: new Date(), charts: charts.map((c) => ({ title: c.title, unit: c.unit, points: c.points.length })), ...(extra.aiSummary !== undefined && { aiSummary: extra.aiSummary }) }); // the preview shows exactly what the file will hold
   const file = `achievion-${name}-${new Date().toISOString().slice(0, 10)}.${format}`;
   AuditLog.create({ action: "report_exported", orgId: org._id, performedBy: req.user.id, scope: "report", detail: `${doc.title} exported as ${format.toUpperCase()} (${doc.filters}).` })
     .catch((e) => console.error("[audit]", e.message));
 
   res.setHeader("Content-Disposition", `attachment; filename="${file}"`);
   if (format === "csv") {
-    // Quote every cell; a cell starting with = + - @ gets a leading ' so a spreadsheet does not run it as a formula.
-    const safe = (v) => (/^[=+\-@]/.test(v) && !/^[+-]?\d+(\.\d+)?( XP|%)?$/.test(v) ? `'${v}` : v); // plain numbers like -10 stay numbers
-    const cell = (c) => `"${safe(String(c)).replace(/"/g, '""')}"`;
-    const csv = doc.sections.flatMap((s) => [cell(s.heading), s.headers.map(cell).join(","), ...s.rows.map((r) => r.map(cell).join(",")), ""]).join("\n");
+    // One CSV rule for every export (services/csvRules.js): quoted cells, formulas neutralised, UTF-8 BOM.
+    const csv = doc.sections.flatMap((s) => [csvCell(s.heading), toCsv(s.headers, s.rows), ""]).join("\n");
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
-    return res.send(`﻿${csv}`);
+    return res.send(CSV_BOM + csv);
+  }
+  if (format === "xlsx") {
+    res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    const generatedBy = req.user.name ? `${req.user.name} (${req.user.role})` : req.user.role ?? "";
+    return res.send(Buffer.from(await buildReportXlsx(doc, { orgName: org.name ?? "", aiSummary: extra.aiSummary, generatedBy })));
   }
   res.setHeader("Content-Type", "application/pdf");
-  renderPdf(doc, res);
+  res.send(await buildReportPdf(doc, { orgName: org.name ?? "", logo: await logoBytes(String(org._id)), charts, aiSummary: extra.aiSummary }));
 }
 
-// Title, filters, date, one table per section, "Generated by ACHIEVION" footer on every page.
-function renderPdf(doc, out) {
-  const pdf = new PDFDocument({ margin: 48, size: "A4", bufferPages: true, info: { Title: doc.title, Creator: "ACHIEVION" } });
-  pdf.pipe(out);
-  const left = 48, width = pdf.page.width - 96, bottom = () => pdf.page.height - 72;
-  pdf.font("Helvetica-Bold").fontSize(18).fillColor("#101828").text(doc.title, left, 48);
-  pdf.moveDown(0.3).font("Helvetica").fontSize(10).fillColor("#475467").text(doc.filters);
-  pdf.text(`Generated ${new Date().toLocaleDateString("en-GB", { day: "numeric", month: "long", year: "numeric" })}`);
-  pdf.moveDown(1);
-
-  for (const s of doc.sections) {
-    if (pdf.y > bottom() - 60) pdf.addPage();
-    pdf.font("Helvetica-Bold").fontSize(12).fillColor("#101828").text(s.heading, left, pdf.y);
-    pdf.moveDown(0.4);
-    const n = s.headers.length;
-    // First column holds names / labels; a two-column table sizes it to its longest label (dates stay narrow).
-    pdf.font("Helvetica").fontSize(9);
-    const first = n > 2 ? Math.max(width * 0.34, 150)
-      : Math.min(width * 0.6, Math.max(90, ...[s.headers[0], ...s.rows.map((r) => r[0])].map((c) => pdf.widthOfString(String(c)) + 24)));
-    const widths = [first, ...Array(n - 1).fill((width - first) / Math.max(1, n - 1))];
-    const row = (cells, bold) => {
-      pdf.font(bold ? "Helvetica-Bold" : "Helvetica").fontSize(9);
-      const h = Math.max(...cells.map((c, i) => pdf.heightOfString(String(c), { width: widths[i] - 8 }))) + 6;
-      if (pdf.y + h > bottom()) pdf.addPage();
-      const y = pdf.y;
-      let x = left;
-      cells.forEach((c, i) => { pdf.fillColor(bold ? "#475467" : "#101828").text(String(c), x, y + 3, { width: widths[i] - 8 }); x += widths[i]; });
-      pdf.moveTo(left, y + h).lineTo(left + width, y + h).lineWidth(0.5).strokeColor("#E4E7EC").stroke();
-      pdf.x = left; pdf.y = y + h;
-    };
-    row(s.headers, true);
-    if (!s.rows.length) { pdf.font("Helvetica").fontSize(9).fillColor("#475467").text("Nothing in this period.", left, pdf.y + 4); pdf.moveDown(0.5); }
-    for (const r of s.rows) row(r, false);
-    pdf.moveDown(1.2);
-  }
-
-  const range = pdf.bufferedPageRange();
-  for (let i = 0; i < range.count; i++) {
-    pdf.switchToPage(i);
-    const margin = pdf.page.margins.bottom;
-    pdf.page.margins.bottom = 0; // writing inside the bottom margin must not open a new page
-    pdf.font("Helvetica").fontSize(8).fillColor("#667085")
-      .text(`Generated by ACHIEVION · Page ${i + 1} of ${range.count}`, left, pdf.page.height - 40, { width, align: "center", lineBreak: false });
-    pdf.page.margins.bottom = margin;
-  }
-  pdf.end();
-}
 
 // ── Lessons learned notes ───────────────────────────────────────────────────
 const auditLesson = (scope, req, action, lesson, detail) => AuditLog.create({

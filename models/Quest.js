@@ -14,13 +14,17 @@ const questSchema = new Schema(
     target:      { type: Number, required: true, min: 1 },
     scope:       { type: String, enum: ["individual", "team", "organisation"], required: true },
     scopeRef:    { kind: { type: String, enum: ["user", "project", "team"] }, id: { type: Types.ObjectId } },
-    rewardXp:    { type: Number, required: true, min: 1 },
-    rewardGold:  { type: Number, default: 0, min: 0 },
+    rewardXp:      { type: Number, required: true, min: 1 },
+    rewardGold:    { type: Number, default: 0, min: 0 },
+    rewardBadgeId: { type: String, default: null },
     startDate:   { type: Date, default: null },
     deadline:    { type: Date, default: null },
     status:      { type: String, enum: ["draft", "active", "completed", "expired"], default: "draft", index: true },
     endedEarly:  { type: Boolean, default: false },
-    participants: [{ type: Types.ObjectId, ref: "User" }],     // fixed at publish from the scope
+    participants: [{ type: Types.ObjectId, ref: "User" }],     // entry "auto": fixed at publish from the scope · "join": the people who joined
+    // Batch 3 (E13, UC-17): set at publish by questJoinRules.entryFor. Old quests have no value = "auto".
+    aiDraft:     { type: Boolean, default: false },            // the form was pre-filled by the AI draft (FR07-02)
+    entry:       { type: String, enum: ["auto", "join"], default: "auto" },
     progress: [{
       _id: false,
       userId:      { type: Types.ObjectId, ref: "User" },

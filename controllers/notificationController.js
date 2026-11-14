@@ -1,5 +1,6 @@
 import Notification from "../models/Notification.js";
 import { getIo }    from "../utils/io.js";
+import { maybeEmailNotify } from "../services/offlineEmail.js";
 
 // ── Shared helper — create a notification and push via socket ─────────────────
 export async function createNotification({ userId, orgId, type, title, message, meta = {} }) {
@@ -8,6 +9,8 @@ export async function createNotification({ userId, orgId, type, title, message, 
   if (io && !notif.muted) {
     io.to(`user:${userId}`).emit("notification:new", notif.toObject());
   }
+  // D-296 IMPL-5 Part 6: fire-and-forget email for offline users on the four event types
+  maybeEmailNotify({ userId, type, title, message });
   return notif;
 }
 

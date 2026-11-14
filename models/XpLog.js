@@ -31,6 +31,8 @@ const xpLogSchema = new Schema(
         "quest", "flag_reversal",
         // T-6: the +5 given to whoever assigned a 5-star task (it had no ledger row before, D-148)
         "assigner_bonus",
+        // D6: Director manual XP adjustment
+        "adjust",
       ],
     },
 
@@ -44,6 +46,8 @@ const xpLogSchema = new Schema(
     questId:        { type: Types.ObjectId, ref: "Quest",  default: null },
     reversalOf:     { type: Types.ObjectId, ref: "XpLog",  default: null }, // flag_reversal: the award it cancels
     flagId:         { type: Types.ObjectId, default: null },
+    // D6: idempotency key for Director manual adjust — prevents double-submit
+    adjustId:       { type: String, default: null },
   },
   { timestamps: true }
 );
@@ -64,6 +68,8 @@ xpLogSchema.index(
 // M-5: one quest reward per user per quest; one reversal per original award, ever.
 xpLogSchema.index({ userId: 1, questId: 1 }, { unique: true, partialFilterExpression: { source: "quest", questId: { $type: "objectId" } } });
 xpLogSchema.index({ reversalOf: 1 }, { unique: true, partialFilterExpression: { reversalOf: { $type: "objectId" } } });
+// D6: one adjust log per adjustId — prevents double-click double-award
+xpLogSchema.index({ adjustId: 1 }, { unique: true, sparse: true, partialFilterExpression: { source: "adjust", adjustId: { $type: "string" } } });
 
 // Append-only ledger (V1 1.3, X7): XP transactions are never edited or removed.
 const appendOnly = () => { throw new Error("XpLog is append-only"); };
@@ -73,5 +79,9 @@ for (const op of ["updateOne", "updateMany", "replaceOne", "findOneAndUpdate", "
 }
 xpLogSchema.pre("updateOne", { document: true, query: false }, appendOnly);
 xpLogSchema.pre("deleteOne", { document: true, query: false }, appendOnly);
+
+// Batch 3 (E4, TC-LB-02): every new ledger row tells the person's organisation that the leaderboard changed.
+// The signal carries no numbers; pages re-read the leaderboard through the normal route. A failure here never fails the award.
+xpLogSchema.post("save", (doc) => { import("../services/leaderboardLive.js").then((m) => m.leaderboardChanged(doc.userId)).catch(() => {}); });
 
 export default model("XpLog", xpLogSchema);

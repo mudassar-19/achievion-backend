@@ -124,6 +124,11 @@ async function finish(req, res, conditional) {
   const ids = assigneeIds(t);
   Task.logActivity(t._id, req.user.id, "status", { from: "In-Review", to: "Done", note: conditional ? `Conditional, ${v.value.stars}★: ${v.value.reason}` : `${v.value.stars}★` });
   await GamificationProfile.updateOne({ userId: req.user.id }, { $inc: { "stats.reviewsGiven": 1 } });
+  // 2.3: check reviewer badges (code_reviewer, the_mentor) on the single award path after every review
+  import("../services/gamificationService.js").then(async (m) => {
+    const rp = await GamificationProfile.findOne({ userId: req.user.id }).lean();
+    await m.checkAndAwardBadges(req.user.id, t.orgId, rp).catch((e) => console.error("[badge] reviewer:", e.message));
+  }).catch(() => {});
   emitter.emit("task.approved", { taskId: t._id, assignees: ids.map(OID), qualityScore: v.value.stars, approverId: req.user.id, orgId: t.orgId, taskTitle: t.title });
   audit(s, req, t, conditional ? "task_conditional_approved" : "task_review_approved", `"${t.title}" ${conditional ? `approved without QA sign-off: ${v.value.reason}` : "approved"} (score ${v.value.score}, ${v.value.stars}★).`,
     { taskId: String(t._id), score: v.value.score, stars: v.value.stars, gap: fs.gap, flagged: !!fs.flag, ...(conditional ? { reason: v.value.reason } : {}) });

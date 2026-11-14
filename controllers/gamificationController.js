@@ -6,7 +6,7 @@ import XpLog from "../models/XpLog.js";
 import Project from "../models/Project.js";
 import Task from "../models/Task.js";
 import { orgScope } from "./managerProjectsController.js";
-import { isRankable, rankRows, rankChange, scopesFor, MIN_PEOPLE } from "../services/leaderboardRules.js";
+import { isRankable, rankRows, rankChange, scopesFor, MIN_PEOPLE, publicRow } from "../services/leaderboardRules.js";
 
 // ── Static badge catalog ──────────────────────────────────────────────────────
 // `progressType` drives the server-side progress engine (see computeBadgeProgress).
@@ -33,7 +33,7 @@ export const BADGE_CATALOG = [
     progressType: "streak", target: 30,
   },
   {
-    name: "Legendary Run",       category: "streak", rarity: "legendary", emoji: "👑",
+    name: "The Legend",          category: "streak", rarity: "legendary", emoji: "👑",
     desc: "100 days — an achievement very few reach",
     condition: "Maintain a 100-day activity streak",
     progressType: "streak", target: 100,
@@ -65,7 +65,7 @@ export const BADGE_CATALOG = [
     progressType: "tasks", target: 100,
   },
   {
-    name: "Punctual",            category: "tasks",  rarity: "rare",      emoji: "⏱️",
+    name: "Speed Demon",         category: "tasks",  rarity: "rare",      emoji: "⚡",
     desc: "Deadlines don't scare you",
     condition: "Complete 10 tasks on time",
     progressType: "onTime", target: 10,
@@ -143,14 +143,33 @@ export const BADGE_CATALOG = [
   {
     name: "Mentor",              category: "special", rarity: "rare",      emoji: "🤝",
     desc: "Leadership through knowledge sharing",
-    condition: "Mentor a junior team member",
-    progressType: "special", target: null,
+    condition: "Complete 10 task reviews",
+    progressType: "reviews", target: 10,
   },
   {
     name: "Silent Killer",       category: "special", rarity: "epic",      emoji: "🎯",
     desc: "High output, zero noise — peak efficiency",
     condition: "Complete 20 tasks with 0 late submissions",
     progressType: "efficiency", target: 20,
+  },
+  // ── Badges 23–25 (new) ───────────────────────────────────────────────────────
+  {
+    name: "Clean Coder",         category: "quality", rarity: "rare",      emoji: "✨",
+    desc: "Quality you can rely on",
+    condition: "Maintain avg quality score 4.5+ over 5+ tasks",
+    progressType: "avgQuality", target: 4.5,
+  },
+  {
+    name: "Bug Slayer",          category: "special", rarity: "epic",      emoji: "🐛",
+    desc: "Turning bugs into features, one fix at a time",
+    condition: "Fix 10 Bug-type tasks",
+    progressType: "bugs", target: 10,
+  },
+  {
+    name: "Sprint MVP",          category: "tasks",   rarity: "legendary", emoji: "🏅",
+    desc: "Carrying the sprint on your back",
+    condition: "Complete 10 tasks",
+    progressType: "tasks", target: 10,
   },
 ];
 
@@ -178,9 +197,14 @@ export async function getProfile(req, res) {
       totalXp:   profile.totalXp ?? 0,
       gold:      profile.gold ?? 0,
       hp:        profile.hp ?? 100,
-      streak:    profile.streaks?.daily ?? 0,
-      badges:    profile.badges ?? [],
-      titles:    profile.titles ?? [],
+      streak:        profile.streaks?.daily ?? 0,
+      badges:        profile.badges ?? [],
+      titles:        profile.titles ?? [],
+      freezeCount:   profile.freezeCount ?? 0,
+      ownedCosmetics: profile.ownedCosmetics ?? [],
+      shopEquipped:  profile.shopEquipped instanceof Map
+        ? Object.fromEntries(profile.shopEquipped)
+        : (profile.shopEquipped ?? {}),
     },
   });
 }
@@ -223,9 +247,9 @@ export async function getLeaderboard(req, res) {
 
   const userFilter = { orgId, status: { $ne: "deleted" } };
   if (people) userFilter._id = { $in: [...people] };
-  const users = (await User.find(userFilter, "_id name role avatarSeed").lean()).filter((u) => isRankable(u.role));
+  const users = (await User.find(userFilter, "_id name role roleLabel avatarSeed").lean()).filter((u) => isRankable(u.role));
   const userIds = users.map((u) => u._id);
-  const profiles = new Map((await GamificationProfile.find({ userId: { $in: userIds } }, "userId level totalXp monthlyXp streaks stats").lean()).map((p) => [String(p.userId), p]));
+  const profiles = new Map((await GamificationProfile.find({ userId: { $in: userIds } }, "userId level totalXp monthlyXp streaks stats avatarStyle avatarSeed shopEquipped").lean()).map((p) => [String(p.userId), p]));
 
   const weekAgo = new Date(Date.now() - 7 * 86_400_000);
   const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
@@ -249,9 +273,11 @@ export async function getLeaderboard(req, res) {
     const tasksCompleted = since ? (d?.done ?? 0) : (p.stats?.tasksCompleted ?? 0);
     const onTimePct = since ? (d?.judged ? Math.round((d.onTime / d.judged) * 100) : null)
       : (p.stats?.tasksCompleted ? Math.round(((p.stats?.onTimeDeliveries ?? 0) / p.stats.tasksCompleted) * 100) : null);
-    return { userId: uid, name: u.name ?? "—", role: u.role ?? "", avatarSeed: u.avatarSeed ?? null, level: p.level ?? 1,
+    // Batch 3 (E4): public fields only, with the avatar the person equipped (else the default).
+    return publicRow({ userId: uid, name: u.name ?? "—", role: u.role ?? "", roleLabel: u.roleLabel ?? null, avatarStyle: p.avatarStyle, avatarSeed: p.avatarSeed ?? null, level: p.level ?? 1,
       xp, rankXp: xp, totalXp, monthlyXp, weeklyXp, tasksCompleted, onTimePct, completionRate: onTimePct ?? 0,
-      streak: p.streaks?.daily ?? 0, isUser: uid === String(userId) };
+      streak: p.streaks?.daily ?? 0, isUser: uid === String(userId),
+      shopEquipped: p.shopEquipped instanceof Map ? Object.fromEntries(p.shopEquipped) : (p.shopEquipped ?? {}) });
   }).sort((a, b) => a.name.localeCompare(b.name));
 
   const ranked = rankRows(rows, (r) => r.xp);

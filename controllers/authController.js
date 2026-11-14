@@ -53,6 +53,7 @@ function sanitize(user, orgName = null, gp = null) {
     name:         user.name,
     email:        user.email,
     role:         user.role,
+    roleLabel:    user.roleLabel ?? null,
     roleCategory: user.roleCategory ?? ROLE_CATEGORY_MAP[user.role] ?? "developer",
     orgId:        user.orgId ?? null,
     orgName:      orgName ?? null,
@@ -199,7 +200,9 @@ export async function getMe(req, res) {
     orgName = org?.name ?? null;
   }
 
-  return res.json({ user: sanitize(user, orgName, await gamiOf(user._id)), viewAs: req.viewAs ?? null });
+  const u = sanitize(user, orgName, await gamiOf(user._id));
+  if (req.viewAs) { u.email = null; u.settings = null; u.hp = null; }
+  return res.json({ user: u, viewAs: req.viewAs ?? null });
 }
 
 // ── POST /api/auth/register-employee ─────────────────────────────────────────
@@ -351,7 +354,7 @@ export async function changePassword(req, res) {
 // ── PATCH /api/auth/settings ──────────────────────────────────────────────────
 // Persists notification and appearance preferences for the logged-in user.
 export async function updateSettings(req, res) {
-  const { notifications, appearance, preferences } = req.body ?? {};
+  const { notifications, appearance, preferences, emailNotificationsEnabled } = req.body ?? {};
 
   const patch = {};
   // U-1 (D-131): only this role's switchable groups are stored; locked "needs action" groups stay on.
@@ -362,6 +365,8 @@ export async function updateSettings(req, res) {
     if (error) return res.status(400).json({ error });
     patch.preferences = value;
   }
+  // D-296 IMPL-5 Part 6: offline email toggle
+  if (emailNotificationsEnabled !== undefined) patch.emailNotificationsEnabled = emailNotificationsEnabled !== false;
 
   if (Object.keys(patch).length === 0)
     return res.status(400).json({ error: "No valid settings provided." });

@@ -12,13 +12,15 @@ import XpLog    from "../models/XpLog.js";
 import AuditLog from "../models/AuditLog.js";
 import { createNotification } from "./notificationController.js";
 import { orgScope } from "./managerProjectsController.js";
-import { applyFlagReversal } from "../services/gamificationService.js";
+import { applyFlagReversal, BADGE_DEFINITIONS } from "../services/gamificationService.js";
+const VALID_BADGE_IDS = new Set(BADGE_DEFINITIONS.map((b) => b.id));
 import { resolveParticipants, refreshQuest, sweepQuests } from "../services/questService.js";
 import { isReadOnly } from "../middleware/viewAs.js";
 import {
   METRICS, PAGE_SIZE, STATUSES, rewardCap, validateQuestInput, publishBlockers, editable, duplicateOf, progressPct,
 } from "../services/questRules.js";
 import { FLAG_KINDS, FLAG_LABEL, flagReason } from "../services/anomalyRules.js";
+import { entryFor } from "../services/questJoinRules.js";
 
 const LEADERS = ["Director", "Manager"];
 const valid = (id) => mongoose.isValidObjectId(id) && /^[0-9a-f]{24}$/i.test(String(id));
@@ -83,6 +85,7 @@ export async function questOptions(req, res) {
     cap: rewardCap(scope.org), metrics: Object.entries(METRICS).map(([value, m]) => ({ value, label: m.label, unit: m.unit })),
     projects: projects.map((p) => ({ id: p._id, title: p.title })), teams: teams.map((t) => ({ id: t._id, name: t.name })),
     people: people.map((u) => ({ id: u._id, name: u.name, role: u.role })), sprints: sprints.map((s) => ({ id: s._id, name: s.name, endDate: s.endDate })),
+    badges: BADGE_DEFINITIONS.map((b) => ({ id: b.id, name: b.name, rarity: b.rarity })),
   });
 }
 
@@ -107,9 +110,9 @@ export async function createQuest(req, res) {
   const scope = await scopeOr404(req, res); if (!scope) return;
   const refs = await checkRefs(scope, req.body ?? {});
   if (refs.errors) return fail(res, refs.errors);
-  const { errors, value } = validateQuestInput({ ...req.body, sprintEnd: refs.sprintEnd }, { cap: rewardCap(scope.org) });
+  const { errors, value } = validateQuestInput({ ...req.body, sprintEnd: refs.sprintEnd }, { cap: rewardCap(scope.org), validBadgeIds: VALID_BADGE_IDS });
   if (Object.keys(errors).length) return fail(res, errors);
-  const q = await Quest.create({ ...value, orgId: req.user.orgId, status: "draft", createdBy: req.user.id });
+  const q = await Quest.create({ ...value, orgId: req.user.orgId, status: "draft", createdBy: req.user.id, aiDraft: req.body?.aiDraft === true }); // Batch 3: AI-made → automatic entry
   log(scope, req, "quest_created", `Challenge "${q.title}" drafted.`);
   res.status(201).json(questOut(q));
 }
@@ -157,7 +160,7 @@ export async function updateQuest(req, res) {
     const body = { ...questOut(q), ...req.body };
     const refs = await checkRefs(scope, body);
     if (refs.errors) return fail(res, refs.errors);
-    const { errors, value } = validateQuestInput({ ...body, sprintEnd: refs.sprintEnd }, { cap: rewardCap(scope.org) });
+    const { errors, value } = validateQuestInput({ ...body, sprintEnd: refs.sprintEnd }, { cap: rewardCap(scope.org), validBadgeIds: VALID_BADGE_IDS });
     if (Object.keys(errors).length) return fail(res, errors);
     Object.assign(q, value);
   }
@@ -182,19 +185,21 @@ export async function publishQuest(req, res) {
   if (q.status === "draft" && q.type === "sprint" && q.sprintId && !(await Sprint.exists({ _id: q.sprintId, status: { $ne: "Completed" } }))) {
     return res.status(409).json({ error: "That sprint is closed. Pick another sprint first." });
   }
-  const participants = q.status === "draft" ? await resolveParticipants(q, idsOf(scope)) : [];
-  const reasons = publishBlockers(q, { participants: participants.length });
+  // Batch 3 (E13, UC-17 step 3): a hand-made team / company quest starts empty and people join it; the people in scope are told.
+  const inScope = q.status === "draft" ? await resolveParticipants(q, idsOf(scope)) : [];
+  const entry = entryFor(q), participants = entry === "join" ? [] : inScope;
+  const reasons = publishBlockers(q, { participants: inScope.length });
   if (reasons.length) return res.status(409).json({ error: reasons[0], reasons });
   const done = await Quest.findOneAndUpdate({ _id: q._id, status: "draft" },
-    { $set: { status: "active", participants, progress: [], publishedAt: new Date(), seriesId: q.repeat ? q._id : null } }, { returnDocument: "after" });
+    { $set: { status: "active", entry, participants, progress: [], publishedAt: new Date(), seriesId: q.repeat ? q._id : null } }, { returnDocument: "after" });
   if (!done) return res.status(409).json({ error: "Only a draft can be published." });
-  for (const uid of participants) {
+  for (const uid of inScope) {
     createNotification({ userId: uid, orgId: req.user.orgId, type: "quest_published", title: "New challenge",
-      message: `"${done.title}": ${METRICS[done.metric].label.toLowerCase()} ${done.target} by ${done.deadline.toDateString()}. Reward ${done.rewardXp} XP${done.rewardGold ? ` + ${done.rewardGold} gold` : ""}.`,
+      message: `"${done.title}": ${METRICS[done.metric].label.toLowerCase()} ${done.target} by ${done.deadline.toDateString()}. Reward ${done.rewardXp} XP${done.rewardGold ? ` + ${done.rewardGold} gold` : ""}.${entry === "join" ? " Join it on Quests." : ""}`,
       meta: { questId: done._id } }).catch(() => {});
   }
-  log(scope, req, "quest_published", `Challenge "${done.title}" published to ${participants.length} people.`);
-  res.json({ ...questOut(done), notified: participants.length });
+  log(scope, req, "quest_published", `Challenge "${done.title}" published to ${inScope.length} people${entry === "join" ? " (they join it themselves)" : ""}.`);
+  res.json({ ...questOut(done), entry, notified: inScope.length });
 }
 
 // POST /api/manager/quests/:id/end  → pays anything already earned, then closes (Expired, ended early). No repeat.
@@ -239,7 +244,7 @@ export async function listAnomalies(req, res) {
   ]);
   const items = rows[0]?.items ?? [];
   const logs = await XpLog.find({ taskId: { $in: items.map((t) => t._id) }, source: "task_approved" }, "taskId userId amount").lean();
-  const users = await User.find({ _id: { $in: [...new Set([...items.flatMap((t) => [t.flag.userId, ...(t.assignees ?? []), t.assignee]), ...logs.map((l) => l.userId)].filter(Boolean).map(String))] } }, "name").lean();
+  const users = await User.find({ _id: { $in: [...new Set([...items.flatMap((t) => [t.flag.userId, t.flag.reviewedBy, ...(t.assignees ?? []), t.assignee]), ...logs.map((l) => l.userId)].filter(Boolean).map(String))] } }, "name").lean();
   const nameOf = Object.fromEntries(users.map((u) => [String(u._id), u.name]));
   res.json({
     page, pageSize: PAGE_SIZE, total: rows[0]?.total?.[0]?.n ?? 0,
@@ -250,6 +255,8 @@ export async function listAnomalies(req, res) {
         id: t.flag._id, taskId: t._id, task: t.title, kind: t.flag.kind, reason: FLAG_LABEL[t.flag.kind], status: t.flag.status, date: t.flag.createdAt,
         people: [...new Set(people.map(String))].map((id) => ({ id, name: nameOf[id] ?? "Former member" })),
         xp: t.flag.xp ?? (mine.length ? mine.reduce((s, l) => s + l.amount, 0) : null),
+        // Batch 5 (D9): who decided and when (null while the flag is open)
+        decidedBy: t.flag.status !== "open" && t.flag.reviewedBy ? nameOf[String(t.flag.reviewedBy)] ?? "Former member" : null, decidedAt: t.flag.status !== "open" ? t.flag.reviewedAt ?? null : null,
       };
     }),
   });

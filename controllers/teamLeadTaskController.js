@@ -23,6 +23,7 @@ import { aiEvalView } from "../services/aiEvalService.js";
 import { ROLE_TASK_ELIGIBILITY, ROLE_TO_CATEGORY } from "../services/workloadService.js";
 import { reassignBlockers } from "../services/resourceRules.js";
 import { capture, passOn } from "../utils/capture.js";
+import { fileStore } from "../middleware/upload.js";
 import { validateTaskInput, groupTasks, canDeleteTask, isBlocked, validateSavedFilter, validateBulk, bulkSprintPlan, MAX_SAVED_FILTERS } from "../services/taskFormRules.js";
 
 const valid = (id) => mongoose.isValidObjectId(id) && /^[0-9a-f]{24}$/i.test(String(id));
@@ -143,15 +144,18 @@ export async function addAttachments(req, res) {
   if (!files.length) return res.status(400).json({ error: "Pick a file (PDF, DOC, DOCX, CSV, PNG or JPG, up to 5 MB)." });
   const t = await Task.findById(req.params.id, "attachments").lean();
   if ((t.attachments?.length ?? 0) + files.length > 20) return res.status(400).json({ error: "A task can hold at most 20 files." });
-  const add = files.map((f) => ({ name: f.originalname.slice(0, 120), url: `/uploads/attachments/${f.filename}`, size: f.size, by: req.user.id, at: new Date() }));
+  const add = files.map((f) => ({ name: f.originalname.slice(0, 120), url: f.stored.url, size: f.size, by: req.user.id, at: new Date() }));
   await Task.updateOne({ _id: req.params.id }, { $push: { attachments: { $each: add } } });
   Task.logActivity(req.params.id, req.user.id, "edited", { note: `added ${add.length} file${add.length === 1 ? "" : "s"}` });
   res.status(201).json({ added: add.length });
 }
 export async function removeAttachment(req, res) {
   if (!valid(req.params.attId)) return res.status(404).json({ error: "File not found." });
-  const r = await Task.updateOne({ _id: req.params.id }, { $pull: { attachments: { _id: OID(req.params.attId) } } });
-  if (!r.modifiedCount) return res.status(404).json({ error: "File not found." });
+  const t = await Task.findById(req.params.id, "attachments").lean();
+  const gone = (t?.attachments ?? []).find((a) => String(a._id) === String(req.params.attId));
+  if (!gone) return res.status(404).json({ error: "File not found." }); // (modifiedCount is 1 even for a missing id: updatedAt changes)
+  await Task.updateOne({ _id: req.params.id }, { $pull: { attachments: { _id: OID(req.params.attId) } } });
+  if (gone?.url) fileStore.remove(gone.url); // the stored file goes too; a failure is logged and never blocks the user
   Task.logActivity(req.params.id, req.user.id, "edited", { note: "removed a file" });
   res.json({ ok: true });
 }

@@ -1,3 +1,5 @@
+import * as org from "../controllers/directorOrgController.js";
+import { listAnomalies, getAnomaly } from "../controllers/managerMotivationController.js";
 import { Router } from "express";
 import { verifyToken, requireRole } from "../middleware/authMiddleware.js";
 import {
@@ -6,6 +8,8 @@ import {
   getAnalytics,
   getTeam,
   updateTeamMemberRole,
+  adjustXp,
+  getGarden,
   getProjects,
   getProjectDetail,
   updateProjectXpPool,
@@ -27,6 +31,10 @@ import {
   resetXpPools,
 } from "../controllers/directorSettingsController.js";
 import {
+  listCustomRoles, addCustomRole, updateCustomRole, deactivateCustomRole, setUserRoleLabel,
+} from "../controllers/customRolesController.js";
+import { listBookings, cancelBooking } from "../controllers/assetBookingController.js";
+import {
   listNotifications,
   countNotifications,
   markRead,
@@ -38,10 +46,11 @@ import { listReports, getReport, addMessage, updateReport } from "../controllers
 import { listGoals, createGoal, updateGoal, recalculateGoal } from "../controllers/goalController.js";
 import { listRecaps, pendingRecaps, markSeen, generateRecap }   from "../controllers/recapController.js";
 import { reportPortfolio, reportDelivery, reportCapacity, exportReport } from "../controllers/reportsController.js";
-import { getOrgHealth, saveOrgHealthSnapshot, getOrgHealthHistory, getDeptDetail, listDepartments } from "../controllers/orgHealthController.js";
+import { getOrgHealth, saveOrgHealthSnapshot, getOrgHealthHistory, getDeptDetail } from "../controllers/orgHealthController.js";
 import { getSuccessCriteria } from "../controllers/successCriteriaController.js";
 import { capacityHeatmap }    from "../controllers/capacityHeatmapController.js";
 import { explainChart, suggestRebalance, sendRebalanceToManager, weeklySummary, aiStatus, askAchievion, reindexRag } from "../controllers/aiGatewayController.js";
+import { needStorage } from "../middleware/upload.js";
 import { getDues }   from "../controllers/duesController.js";
 import { listViews, createView, updateView, deleteView } from "../controllers/portfolioViewController.js";
 
@@ -55,6 +64,8 @@ router.get("/approvals/reviewed",                 getRecentlyReviewed);
 router.get("/analytics",                          getAnalytics);
 router.get("/team",                               getTeam);
 router.patch("/team/:userId/role",                updateTeamMemberRole);
+router.post("/team/:userId/adjust-xp",            adjustXp);
+router.get("/garden",                             getGarden);
 router.get("/projects",                           getProjects);
 router.get("/projects/:id",                       getProjectDetail);
 router.patch("/projects/:projectId/xp-pool",      updateProjectXpPool);
@@ -74,6 +85,17 @@ router.get("/reports/sprint-velocity",             getSprintVelocity);
 router.get("/settings",                           getSettings);
 router.patch("/settings",                         updateSettings);
 router.post("/settings/reset-xp-pools",           resetXpPools);
+
+// Custom roles — D-294 IMPL-5 Part 4
+router.get("/settings/custom-roles",              listCustomRoles);
+router.post("/settings/custom-roles",             addCustomRole);
+router.patch("/settings/custom-roles/:key",       updateCustomRole);
+router.delete("/settings/custom-roles/:key",      deactivateCustomRole);
+router.patch("/settings/users/:userId/role-label", setUserRoleLabel);
+
+// Asset bookings (read-only for Director) — D-295 IMPL-5 Part 5
+router.get("/assets/:assetId/bookings",           listBookings);
+router.delete("/assets/:assetId/bookings/:bookingId", cancelBooking);
 
 // Notifications — Slice 3a (replaces stubs)
 router.get("/notifications/count",                countNotifications);
@@ -114,7 +136,16 @@ router.get("/reports/export",                     exportReport);
 router.get("/org-health",                         getOrgHealth);
 router.post("/org-health/snapshot",               saveOrgHealthSnapshot);
 router.get("/org-health/history",                 getOrgHealthHistory);
-router.get("/departments",                        listDepartments);
+// Batch 5 (D4, N5, D7, D9)
+router.get("/departments",                        org.listDepartments);
+router.post("/departments",                       org.createDepartment);
+router.patch("/departments",                      org.renameDepartmentRoute);
+router.post("/departments/archive",               org.archiveDepartment);
+router.patch("/team/:userId/department",          org.setMemberDepartment);
+router.post("/branding/logo",                     needStorage, org.receiveLogo, org.uploadLogo);
+router.delete("/branding/logo",                   org.removeLogo);
+router.get("/anomalies",                          listAnomalies);   // read only: decisions stay on the Manager's routes
+router.get("/anomalies/:flagId",                  getAnomaly);
 router.get("/dept/:deptName",                     getDeptDetail);
 
 // Success Criteria — Slice 3f

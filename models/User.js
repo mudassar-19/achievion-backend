@@ -63,6 +63,14 @@ const userSchema = new Schema(
       required: [true, "Role is required"],
     },
 
+    // D-294 IMPL-5 Part 4: custom role label set by Director (overrides role display name in UI).
+    // The role enum stays unchanged; this is display-only.
+    roleLabel: {
+      type:    String,
+      trim:    true,
+      default: null,
+    },
+
     // ObjectId string of the Organization this employee belongs to.
     // null for users created via the old direct-register flow.
     orgId: {
@@ -77,6 +85,12 @@ const userSchema = new Schema(
       trim:    true,
       default: null,
     },
+
+    // Batch 5 (N4, FR01-06): technical skills and a contact phone, edited by the person (PATCH /api/auth/profile-details).
+    skills: { type: [String], default: [] },
+    phone:  { type: String, trim: true, default: null },
+    // Batch 5 (X17, FR01-11): last authenticated activity, written at most once a minute (authMiddleware).
+    lastSeenAt: { type: Date, default: null },
 
     // Account lifecycle state — managed by org admin.
     // M-4: a Manager's own workload limit for their team (null = Director default, FR11-03).

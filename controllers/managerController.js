@@ -365,8 +365,8 @@ export async function createProject(req, res) {
   // Map uploaded files to attachment metadata
   const attachments = (req.files ?? []).map((f) => ({
     name:       f.originalname,
-    filename:   f.filename,
-    filePath:   `/uploads/attachments/${f.filename}`,
+    filename:   f.stored.filename,
+    filePath:   f.stored.filePath,
     size:       f.size,
     mimetype:   f.mimetype,
     uploadedBy: userId,

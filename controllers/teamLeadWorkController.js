@@ -233,7 +233,7 @@ export async function taskDetail(req, res) {
 export async function getTeam(req, res) {
   const s = await tlScope(req, res); if (!s) return;
   if (!s.team.size) return res.json({ threshold: { pct: 100 }, workTime: null, projects: [], members: [] });
-  const { threshold, workTime, projects, members } = await workloadView(s.scope, req.user.id, { userIds: [...s.team.keys()], projectIds: [...s.ids].map((x) => new mongoose.Types.ObjectId(x)) });
+  const { threshold, workTime, projects, members } = await workloadView(s.scope, req.user.id, { userIds: [...s.team.keys()], projectIds: [...s.ids].map((x) => new mongoose.Types.ObjectId(x)), seenBy: { role: req.user.role, viewAs: req.viewAs } });
   res.json({ threshold, workTime, projects, members });
 }
 export async function getTeamMember(req, res) {

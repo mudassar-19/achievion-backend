@@ -1,6 +1,7 @@
 // Manager Resources (V2 Phase 3 · M-4, UX §7): Workload (engine numbers), member drawer, threshold override,
 // reassign, Assets. Every route: Manager only (route guard) + people/tasks/projects/assets in the caller's org.
 // The tier formula is the workload engine's (D-072); rules for this screen live in services/resourceRules.js.
+import { lastSeenFor } from "../services/presenceRules.js";
 import mongoose from "mongoose";
 import User     from "../models/User.js";
 import Task     from "../models/Task.js";
@@ -52,8 +53,10 @@ async function alertIfOver(req, snaps, threshold) {
 }
 
 // Workload rows for people in the org (or only `userIds`, for a Team Lead's team) — same numbers as Resources.
-export async function workloadView(scope, viewerId, { userIds = null, projectIds = null } = {}) {
-  const users = await User.find({ ...scope.filter, status: { $ne: "deleted" }, role: { $nin: LEADERS }, ...(userIds ? { _id: { $in: userIds } } : {}) }, "_id").lean();
+// seenBy: the viewer ({ role, viewAs }) when the roster may show last seen (X17); without it the field is not sent at all.
+export async function workloadView(scope, viewerId, { userIds = null, projectIds = null, seenBy = null } = {}) {
+  const users = await User.find({ ...scope.filter, status: { $ne: "deleted" }, role: { $nin: LEADERS }, ...(userIds ? { _id: { $in: userIds } } : {}) }, "_id lastSeenAt").lean();
+  const seenAt = new Map(users.map((u) => [String(u._id), u.lastSeenAt ?? null]));
   const workTime = orgWorkTime(scope.org);
   const [snaps, projects, threshold] = await Promise.all([
     getBulkWorkloadSnapshots(users.map((u) => u._id), { workTime }),
@@ -67,6 +70,7 @@ export async function workloadView(scope, viewerId, { userIds = null, projectIds
     members: snaps.map((s) => ({
       id: s.userId, name: s.name, role: s.role, roleCategory: s.roleCategory, projectIds: projectsOf(s.userId),
       activeTasks: s.activeTaskCount, dueThisWeek: dueThisWeek(s.activeTasks), hp: s.hp, ...view(s, threshold.pct),
+      ...(seenBy && { lastSeenAt: lastSeenFor(seenBy, seenAt.get(String(s.userId))) }),
     })).sort((a, b) => b.utilisation - a.utilisation || a.name.localeCompare(b.name)),
   };
 }
@@ -74,7 +78,7 @@ export async function workloadView(scope, viewerId, { userIds = null, projectIds
 // ── GET /api/manager/resources/workload ──────────────────────────────────────
 export async function getWorkload(req, res) {
   const scope = await scopeOr404(req, res); if (!scope) return;
-  const { snaps, threshold, ...out } = await workloadView(scope, req.user.id);
+  const { snaps, threshold, ...out } = await workloadView(scope, req.user.id, { seenBy: { role: req.user.role, viewAs: req.viewAs } });
   alertIfOver(req, snaps, threshold.pct).catch(() => {});
   res.json({ threshold, ...out });
 }

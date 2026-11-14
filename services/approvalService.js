@@ -12,7 +12,7 @@ function actionLabel(actionType, payload, target) {
   switch (actionType) {
     case "CREATE_EMPLOYEE":     return `Create account for ${payload?.name ?? "new employee"} (${payload?.role ?? ""})`;
     case "DELETE_EMPLOYEE":     return `Delete ${name}`;
-    case "SUSPEND_EMPLOYEE":    return `Suspend ${name}`;
+    case "SUSPEND_EMPLOYEE":    return `Suspend ${name}${payload?.reason ? ` — "${payload.reason.slice(0, 60)}${payload.reason.length > 60 ? "…" : ""}"` : ""}`;
     case "REACTIVATE_EMPLOYEE": return `Reactivate ${name}`;
     case "ROLE_CHANGE":         return `Role change for ${name}: ${payload?.oldRole} → ${payload?.newRole}`;
     default:                    return actionType;
@@ -48,12 +48,15 @@ export async function createApprovalRequest({
   const director = await User.findOne({ orgId, role: "Director" }).lean();
 
   if (director) {
+    const suspendReason = actionType === "SUSPEND_EMPLOYEE" && payload?.reason
+      ? ` — "${payload.reason.slice(0, 80)}${payload.reason.length > 80 ? "…" : ""}"`
+      : "";
     // Persist in-app notification for the Director
     await Notification.create({
       userId:  director._id,
       orgId:   String(orgId),
       type:    "approval_required",
-      message: `New ${actionType} request pending your approval`,
+      message: `New ${actionType} request pending your approval${suspendReason}`,
       meta:    { approvalId: approval._id },
     });
 
@@ -101,13 +104,14 @@ export async function executeApproval(approvalId, approverId = null) {
 
   switch (actionType) {
     case "CREATE_EMPLOYEE":
-      // payload: { name, email, password (pre-hashed), role, orgId (string) }
+      // payload: { name, email, password (pre-hashed), role, roleLabel?, orgId (string) }
       result = await User.create({
-        name:     payload.name,
-        email:    payload.email,
-        password: payload.password,
-        role:     payload.role,
-        orgId:    payload.orgId,        // string e.g. "ORG-XXXXXX"
+        name:      payload.name,
+        email:     payload.email,
+        password:  payload.password,
+        role:      payload.role,
+        ...(payload.roleLabel && { roleLabel: payload.roleLabel }),
+        orgId:     payload.orgId,       // string e.g. "ORG-XXXXXX"
       });
       // Add to org members array
       await Organization.updateOne(
@@ -117,7 +121,14 @@ export async function executeApproval(approvalId, approverId = null) {
       break;
 
     case "DELETE_EMPLOYEE":
-      result = await User.findByIdAndDelete(targetEmployeeId);
+      result = await User.findByIdAndUpdate(
+        targetEmployeeId,
+        { status: "deleted" },
+        { returnDocument: "after" }
+      );
+      if (result) {
+        await Organization.updateOne({ _id: orgId }, { $pull: { members: targetEmployeeId } });
+      }
       break;
 
     case "SUSPEND_EMPLOYEE": {
@@ -199,7 +210,7 @@ export async function executeApproval(approvalId, approverId = null) {
   const auditMap = {
     CREATE_EMPLOYEE:     { action: "employee_created",      newRole:   payload?.role },
     DELETE_EMPLOYEE:     { action: "account_deleted" },
-    SUSPEND_EMPLOYEE:    { action: "account_status_change", newStatus: "suspended" },
+    SUSPEND_EMPLOYEE:    { action: "account_status_change", newStatus: "suspended", detail: payload?.reason ? `Reason: ${payload.reason}` : undefined },
     REACTIVATE_EMPLOYEE: { action: "account_status_change", newStatus: "active" },
     ROLE_CHANGE:         { action: "role_change",           oldRole:   payload?.oldRole, newRole: payload?.newRole },
   };

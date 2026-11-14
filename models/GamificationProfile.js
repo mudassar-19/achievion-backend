@@ -49,6 +49,11 @@ const gpSchema = new Schema(
     ],
     activeTitle: { type: String, default: "newcomer" },
 
+    // ── Shop (D-243..D-245) ──────────────────────────────────────────────────
+    freezeCount:      { type: Number, default: 0, min: 0 },   // Streak Freeze consumable stack
+    ownedCosmetics:   [{ type: String }],                      // itemIds purchased from shop
+    shopEquipped:     { type: Map, of: String, default: {} },  // slot → itemId
+
     // ── Avatar & cosmetics ───────────────────────────────────────────────────
     avatarStyle: { type: String, default: "bottts" },
     avatarSeed:  { type: String, default: null },

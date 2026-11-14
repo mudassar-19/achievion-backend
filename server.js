@@ -30,7 +30,8 @@ import extensionRoutes                        from "./routes/extensionRoutes.js"
 import riskRoutes                             from "./routes/riskRoutes.js";
 import voiceRoutes                            from "./routes/voiceRoutes.js";
 import { verifyToken }                        from "./middleware/authMiddleware.js";
-import fileRoutes from "./routes/fileRoutes.js";
+import fileRoutes  from "./routes/fileRoutes.js";
+import shopRoutes  from "./routes/shopRoutes.js";
 import { requireSignedFile } from "./controllers/fileController.js";
 import { errorStatus } from "./services/accessRules.js";
 import { createPerfLog }                      from "./controllers/perfLogController.js";
@@ -253,6 +254,8 @@ app.use(express.urlencoded({ extended: true }));
 // Serve project attachment uploads
 // S-1 (D-157): only through a signed link from GET /api/files/sign.
 app.use("/uploads", requireSignedFile, express.static(path.resolve(process.cwd(), "uploads"), { cacheControl: false, dotfiles: "deny", index: false, redirect: false }));
+// A valid signed link to a file that is not on this disk (older records, or a disk reset by a deploy): say so instead of "Route not found".
+app.use("/uploads", (_req, res) => res.status(404).json({ error: "This file is no longer stored on the server. Upload it again.", code: "file_missing" }));
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 const authLimiter = rateLimit({
@@ -286,6 +289,7 @@ app.use("/api/teams",         teamRoutes);
 app.use("/api/teamlead",      teamLeadRoutes);
 app.use("/api/workspace",     workspaceRoutes);
 app.use("/api/quality",       qualityRoutes);
+app.use("/api/shop",          shopRoutes);
 app.use("/api/workload",      workloadRoutes);
 app.use("/api/extensions",   extensionRoutes);
 app.use("/api/risks",        riskRoutes);

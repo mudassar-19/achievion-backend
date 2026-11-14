@@ -45,7 +45,7 @@ export async function refreshQuest(quest, { by = "system", orgIds = null } = {})
   });
   for (const uid of dueRewards(rows, rewarded)) {
     if (quest.metric === "streak_days" && !open) continue;
-    if (await applyQuestReward({ questId: quest._id, userId: uid, orgId: quest.orgId, xp: quest.rewardXp, gold: quest.rewardGold, title: quest.title, by })) rewarded.set(uid, now);
+    if (await applyQuestReward({ questId: quest._id, userId: uid, orgId: quest.orgId, xp: quest.rewardXp, gold: quest.rewardGold, title: quest.title, rewardBadgeId: quest.rewardBadgeId ?? null, by })) rewarded.set(uid, now);
   }
   quest.progress = rows.map((r) => ({ userId: r.userId, value: r.value, tasks: r.tasks, completedAt: rewarded.get(String(r.userId)) ?? null }));
   const status = nextStatus(quest, { now: closesNow ? new Date(8.64e15) : now, everyoneDone: ids.length > 0 && ids.every((u) => rewarded.has(String(u))) });
@@ -61,13 +61,15 @@ export async function issueNext(prev, orgIds = null) {
   const period = nextPeriod(prev);
   if (!period) return null;
   const ids = orgIds ?? [prev.orgId];
-  const participants = await resolveParticipants(prev, ids);
+  // Batch 3 (E13): a quest people joined keeps its joiners in the next period; an automatic one re-reads its scope.
+  const participants = prev.entry === "join" ? (prev.participants ?? []) : await resolveParticipants(prev, ids);
   try {
     const next = await Quest.create({
       orgId: prev.orgId, title: prev.title, description: prev.description, type: prev.type, repeat: true, metric: prev.metric, target: prev.target,
       scope: prev.scope, scopeRef: prev.scopeRef, rewardXp: prev.rewardXp, rewardGold: prev.rewardGold,
       startDate: period.start, deadline: period.end, status: "active", participants, progress: [],
       seriesId: prev.seriesId ?? prev._id, previousId: prev._id, createdBy: prev.createdBy, publishedAt: new Date(),
+      entry: prev.entry ?? "auto", aiDraft: !!prev.aiDraft, rewardBadgeId: prev.rewardBadgeId ?? null, // the next period keeps the badge reward
     });
     return next;
   } catch (err) {

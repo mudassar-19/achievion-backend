@@ -3,8 +3,8 @@ import Task from "../models/Task.js";
 import Project from "../models/Project.js";
 import Bug from "../models/Bug.js";
 import { orgScope } from "./managerProjectsController.js";
-import cloudinary from "../config/cloudinary.js";
-import { mayOpenAny, isSafeUploadPath, signFilePath, verifyFileLink, parseCloudinaryUrl, FILE_LINK_SECONDS } from "../services/accessRules.js";
+import { fileStore } from "../middleware/upload.js";
+import { mayOpenAny, isSafeUploadPath, signFilePath, verifyFileLink, parseCloudinaryUrl } from "../services/accessRules.js";
 
 const NOT_FOUND = { error: "File not found." };
 
@@ -30,8 +30,8 @@ export async function signFile(req, res) {
   if (!mayOpenAny(req.user, places)) return res.status(404).json(NOT_FOUND);
   if (cld) {
     // Works on the Free plan, also for PDFs, and it expires; Cloudinary's own signed delivery URLs do neither (D-164).
-    const exp = Math.floor(Date.now() / 1000) + FILE_LINK_SECONDS;
-    return res.json({ exp, url: cloudinary.utils.private_download_url(cld.publicId, cld.format, { resource_type: cld.resourceType, type: "authenticated", expires_at: exp }) });
+    const link = fileStore.signedUrl(path);
+    return link ? res.json(link) : res.status(503).json({ error: "File storage is not configured on this server.", code: "storage_off" });
   }
   const { exp, sig } = signFilePath(path);
   res.json({ url: `${path}?exp=${exp}&sig=${sig}`, exp });

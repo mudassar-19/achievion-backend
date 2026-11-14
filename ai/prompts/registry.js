@@ -150,6 +150,7 @@ Reply with JSON only: {"lessons":["...","...","..."]} with 1 to 3 short, concret
   // services/managerAiRules.js, and may only use the short references ("m1", "p2", "t3") given in <data>.
   ...MANAGER_PROMPTS(),
   ...TEAM_LEAD_PROMPTS(), // T-6 (D-149): checked by services/tlAiRules.js + managerAiRules.js
+  ...EMPLOYEE_PROMPTS(),  // Batch 4 (E14, E15, N11, N12): checked by services/employeeAiRules.js
 
   // ── V2 Phase 4 · T-3 (D-127): Team Lead breakdown + benchmark. Suggest only; rows are checked by
   // services/breakdownRules.js (invented references rejected, hours clamped to 1-14 h, D-012).
@@ -204,6 +205,41 @@ Use only the numbers in <data>; never invent people, tasks or numbers. In JSON i
       `Explain in 2-3 plain sentences what this realism check means for the draft and what the Team Lead could look at. Use only numbers that appear in <data>, exactly as written; do no arithmetic and add no new number.`,
       `{"explanation":"..."}`),
   };
+}
+
+// Employee AI (Batch 4). Personas from the FYP-1 report: MomentumCoach for everyone, one expert per role.
+// <data> holds only the asking person's own numbers and tasks (employeeAiRules.snapshotFor): no AI score, no other person.
+function EMPLOYEE_PROMPTS() {
+  const PERSONAS = {
+    momentum: `You are MomentumCoach, a calm coach for one person in a software house. You help with pace and priorities: what to do first, how to keep a streak, when to slow down (low HP means the person is tired).`,
+    codementor: `You are CodeMentor, a senior developer who helps one developer get work ready for review: a short pre-review checklist (acceptance criteria met, edge cases, tests, readable names, small change), and plain answers on code craft.`,
+    pixelcritic: `You are PixelCritic, a senior designer who helps one designer get a design ready for handoff: hierarchy, spacing, contrast, all states (empty, loading, error), accessibility and a clear handoff note.`,
+    bughunter: `You are BugHunter, a senior tester who helps one tester inspect work: test ideas, edge cases, and bug reports with steps, expected result, actual result and evidence.`,
+  };
+  const rules = `You only suggest. You cannot change tasks, XP, scores or deadlines; the person decides, and the Team Lead reviews the work.
+${DATA_RULE}
+Use only the numbers and task titles in <data>; never invent tasks, numbers or people, and never talk about another person. <data> never holds an AI score: if asked for one, say the review result is on My submissions after the Team Lead has reviewed. Speak to the person as "you", never as "the developer" or "they". Do no date arithmetic. Short, professional, kind English; describe work, never judge the person.`;
+  const data = (d) => `<data>\n${safe(JSON.stringify(d))}\n</data>`;
+  const entry = (id, maxTokens, system, shape, userTemplate = data) => ({
+    id, version: 2, temperature: 0.3, maxTokens, system: `${system}\n${rules}\nReply with JSON only: ${shape}`, userTemplate, schema: shape, fewShots: [], validate: () => true,
+  });
+  const out = {};
+  for (const [key, who] of Object.entries(PERSONAS)) {
+    out[`emp-chat-${key}`] = entry(`emp-chat-${key}`, 600, // room for a reasoning model on the fallback provider
+      `${who}\nAnswer the question in at most 5 short sentences or 5 bullets ("- "). Use <data> for anything about the person's own tasks, XP or results; general craft advice needs no data. If asked to change something (start, submit, approve, give XP), say you cannot and name the screen: My tasks, My submissions or Profile.`,
+      `{"answer":"..."}`,
+      (d) => `${data({ today: d.today, snapshot: d.snapshot, history: d.history })}\n<question>\n${safe(d.question)}\n</question>`);
+    out[`emp-tips-${key}`] = entry(`emp-tips-${key}`, 700,
+      `${who}\nGive 3 to 5 practical tips for today from the snapshot in <data> (never more than 8). Each tip: "title" of at most 6 words and "tip" of one sentence that names the task or the number it is based on.`,
+      `{"tips":[{"title":"...","tip":"..."}]}`);
+  }
+  out["emp-board-line"] = entry("emp-board-line", 300,
+    `${PERSONAS.momentum}\nWrite ONE encouraging line (at most 25 words) about this person's place on the leaderboard, using their rank, how many people are ranked (say \"people\", not a role) and the XP to the next rank. When leads is true the person is first: say so and do not mention XP to a next rank. State only what the numbers show; no names, no praise for things the data does not show.`,
+    `{"line":"..."}`);
+  out["emp-analytics-summary"] = entry("emp-analytics-summary", 600,
+    `${PERSONAS.momentum}\nSummarise this person's results in 2-3 sentences: completion, on-time share and review score (avgReviewScore is the Team Lead's score, 0-100), and how the last weeks moved. Then give 1 to 4 recommendations (never more than 8), one plain sentence each with no numbering, each naming the number in <data> it is based on; no generic advice. A null number means there is no data yet: say so, do not guess.`,
+    `{"summary":"...","recommendations":["..."]}`);
+  return out;
 }
 
 function MANAGER_PROMPTS() {

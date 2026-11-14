@@ -256,7 +256,8 @@ export async function validateInvite(req, res) {
   const { orgId } = req.body ?? {};
   if (!orgId?.trim()) return clientError(res, 400, "orgId is required.");
 
-  const org = await Organization.findOne({ orgId: orgId.trim().toUpperCase() });
+  const code = orgId.trim().toUpperCase();
+  const org = await Organization.findOne({ $or: [{ orgCode: code }, { orgId: code }] });
   if (!org) return clientError(res, 404, "No organisation found with that invite code.");
   if (org.status === "suspended") return clientError(res, 403, "This organisation account has been suspended.");
 

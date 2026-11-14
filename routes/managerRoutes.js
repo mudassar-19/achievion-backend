@@ -1,6 +1,6 @@
 import { Router } from "express";
 import { verifyToken, requireRole } from "../middleware/authMiddleware.js";
-import { projectAttachmentUpload } from "../middleware/upload.js";
+import { attachmentUpload } from "../middleware/upload.js";
 import {
   getDashboard,
   getTeam,
@@ -52,6 +52,7 @@ import { listManagerGoals }    from "../controllers/goalController.js";
 import { getHome, nudgeReviewer } from "../controllers/managerHomeController.js";
 import * as mp from "../controllers/managerProjectsController.js";
 import * as mr from "../controllers/managerResourcesController.js";
+import { listBookings, createBooking, cancelBooking } from "../controllers/assetBookingController.js";
 import * as mm from "../controllers/managerMotivationController.js";
 import * as rp from "../controllers/managerReportsController.js";
 import * as ai from "../controllers/managerAiController.js";
@@ -69,7 +70,7 @@ const mgr = requireRole("Manager");
 router.get("/projects",                             getProjects);
 // M-2 Projects (Manager only; static paths before /projects/:id)
 router.get("/projects/list",                        mgr, mp.listProjects);
-router.post("/projects", mgr, projectAttachmentUpload.array("attachments", 10), createProject);
+router.post("/projects", mgr, ...attachmentUpload("attachments", 10), createProject);
 router.get("/projects/:id",                         getProjectById);
 router.patch("/projects/:id",                       mgr, mp.editProject);
 router.post("/projects/:id/archive",                mgr, mp.archiveProject);
@@ -95,6 +96,11 @@ router.get("/assets",                               mgr, mr.listAssets);
 router.post("/assets",                              mgr, mr.createAsset);
 router.patch("/assets/:id",                         mgr, mr.updateAsset);
 router.delete("/assets/:id",                        mgr, mr.deleteAsset);
+
+// Asset bookings — D-295 IMPL-5 Part 5
+router.get("/assets/:assetId/bookings",             mgr, listBookings);
+router.post("/assets/:assetId/bookings",            mgr, createBooking);
+router.delete("/assets/:assetId/bookings/:bookingId", mgr, cancelBooking);
 router.get("/projects/:id/assets",                  mgr, mr.getProjectAssets);
 router.post("/projects/:id/assets",                 mgr, (req, res) => mr.linkProjectAsset(req, res));
 router.delete("/projects/:id/assets/:assetId",      mgr, mr.unlinkProjectAsset);
