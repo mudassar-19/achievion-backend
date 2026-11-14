@@ -22,8 +22,18 @@ export async function listMyQuests(req, res) {
   if (!scope) return res.status(404).json({ error: "Organization not found." });
   const me = req.user.id, ids = idsOf(scope), now = new Date();
   if (!req.viewAs) await evaluateQuestsForUser(me).catch((e) => console.error("[quests] refresh:", e.message)); // live progress, expiry; View as is read-only (D-109)
-  const quests = await Quest.find({ orgId: { $in: ids }, status: { $ne: "draft" }, $or: [{ participants: me }, { entry: "join", status: "active", deadline: { $gt: now } }] })
-    .sort({ deadline: 1 }).limit(200).lean();
+  // Two queries so open join quests are never crowded out by accumulated participant history.
+  const [participantQuests, openJoinQuests] = await Promise.all([
+    Quest.find({ orgId: { $in: ids }, status: { $ne: "draft" }, participants: me })
+      .sort({ deadline: -1 }).limit(60).lean(), // 60 covers "mine" + 20 "finished" with headroom
+    Quest.find({ orgId: { $in: ids }, entry: "join", status: "active", deadline: { $gt: now } })
+      .sort({ deadline: 1 }).lean(),
+  ]);
+  const seen_ids = new Set();
+  const quests = [];
+  for (const q of [...openJoinQuests, ...participantQuests]) {
+    if (!seen_ids.has(String(q._id))) { seen_ids.add(String(q._id)); quests.push(q); }
+  }
   const eligible = new Map();
   for (const q of quests) if (!q.participants.some((p) => String(p) === String(me)) && isOpen(q, now)) eligible.set(String(q._id), await inScope(q, me, ids));
   res.json(boardOf(quests, { userId: me, kind: req.user.roleCategory, eligible: (q) => eligible.get(String(q._id)) ?? false, now, badgeOf }));
