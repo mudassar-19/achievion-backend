@@ -10,6 +10,7 @@ import {
   deleteEmployee,
   listOrgApprovals,
   listDeletedEmployees,
+  listCustomRolesForOrg,
 } from "../controllers/orgAdminController.js";
 import { verifyOrgToken } from "../middleware/orgAuth.js";
 
@@ -36,5 +37,6 @@ router.patch("/employees/:userId/status",  updateEmployeeStatus);
 router.delete("/employees/:userId",        deleteEmployee);
 
 router.get("/approvals",                   listOrgApprovals);
+router.get("/custom-roles",               listCustomRolesForOrg);
 
 export default router;

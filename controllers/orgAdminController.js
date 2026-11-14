@@ -110,6 +110,13 @@ export async function getDashboard(req, res) {
   });
 }
 
+// GET /api/org/custom-roles — read-only view of this org's custom roles for org admin
+export async function listCustomRolesForOrg(req, res) {
+  const org = await Organization.findOne({ orgId: req.org.orgId }, "customRoles").lean();
+  if (!org) return clientError(res, 404, "Organization not found.");
+  res.json({ customRoles: org.customRoles ?? [] });
+}
+
 // ── POST /api/org/employees/create ────────────────────────────────────────────
 export async function createEmployee(req, res) {
   const { orgId, orgDbId } = req.org;
@@ -119,7 +126,7 @@ export async function createEmployee(req, res) {
   if (!name?.trim() || !email?.trim()) {
     return clientError(res, 400, "name and email are required.");
   }
-  if (!/\S+@\S+\.\S+/.test(email)) {
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return clientError(res, 400, "Enter a valid email address.");
   }
   if (!VALID_ROLES.includes(role)) {

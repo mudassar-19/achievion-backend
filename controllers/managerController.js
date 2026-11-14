@@ -340,7 +340,10 @@ export async function createProject(req, res) {
   const lateMod = (Array.isArray(milestonesPayload) ? milestonesPayload : []).find((m) => m?.dueDate && deadline && (Number.isNaN(+new Date(m.dueDate)) || new Date(m.dueDate) > new Date(deadline)));
   if (lateMod) return res.status(400).json({ error: "A module deadline cannot be after the project deadline.", fields: { modules: "A module deadline cannot be after the project deadline." } });
   // U-1 (D-132, D-016): each module brings its own Team Lead; the project-level Team Lead defaults to the first one.
-  const modTL = (Array.isArray(milestonesPayload) ? milestonesPayload : []).map((m) => String(m?.teamLeadId ?? "")).filter((x) => /^[0-9a-f]{24}$/i.test(x));
+  const modules = Array.isArray(milestonesPayload) ? milestonesPayload : [];
+  const modTL = modules.map((m) => String(m?.teamLeadId ?? "")).filter((x) => /^[0-9a-f]{24}$/i.test(x));
+  if (modTL.length !== modules.length)
+    return res.status(400).json({ error: "Choose a Team Lead for every module.", fields: { modules: "Choose a Team Lead for every module." } });
   const projectTL = req.body.teamLeadId || modTL[0];
   // M-2: same rules as the wizard (title, priority, dates, Team Lead required).
   const { errors, value: valid } = validateProjectInput({

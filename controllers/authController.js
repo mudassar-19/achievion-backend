@@ -216,7 +216,7 @@ export async function registerEmployee(req, res) {
     return clientError(res, 400, "orgId, email, name, and password are all required.");
   }
 
-  if (!/\S+@\S+\.\S+/.test(email)) {
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
     return clientError(res, 400, "Enter a valid email address.");
   }
 
@@ -346,9 +346,10 @@ export async function changePassword(req, res) {
   if (!match) return res.status(401).json({ error: "Current password is incorrect." });
 
   user.password = await bcrypt.hash(newPassword, SALT_ROUNDS);
+  user.tokenVersion = (user.tokenVersion ?? 0) + 1;
   await user.save();
 
-  res.json({ success: true, message: "Password updated successfully." });
+  res.json({ success: true, message: "Password updated successfully.", token: signToken(user) });
 }
 
 // ── PATCH /api/auth/settings ──────────────────────────────────────────────────

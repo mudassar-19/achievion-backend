@@ -117,6 +117,7 @@ async function teamSnapshot(req, scope, refs, { projectId = null } = {}) {
     activeSprints: (h.sprints ?? []).slice(0, 6).map((s) => ({ ref: refs.add("s", s.id), name: s.name, done: s.done, total: s.total, endDate: s.endDate })),
     teamActivity: h.teamActivity, openAnomalies: h.openAnomalies, runningChallenges: h.runningChallenges,
     workloadLimitPct: wl.threshold, membersByStatus: tiers,
+    membersTotal: members.length,
     members: members.slice(0, 15).map((m) => ({ ref: refs.add("m", m.id), name: m.name, role: m.role, load: m.load, status: m.status, activeTasks: m.activeTasks, freeHoursPerDay: m.freeHoursPerDay })),
     _overloaded: members.filter((m) => m.status === "Overloaded").length, _sprints: h.sprints ?? [], _overdue: h.tasks?.overdue ?? 0,
   };

@@ -48,6 +48,9 @@ export async function verifyToken(req, res, next) {
     if (dbUser.status === "suspended") {
       return res.status(403).json({ error: "Account suspended" });
     }
+    if (dbUser.status === "deleted") {
+      return res.status(401).json({ error: "Account no longer exists." });
+    }
 
     // View as (D-109): the token is the target's; the viewer must still be valid, in the same org, same session.
     if (decoded.viewAs) {

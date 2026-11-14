@@ -76,7 +76,7 @@ export async function registerOrg(req, res) {
 
   if (!orgName?.trim())     return clientError(res, 400, "Organization name is required.");
   if (!adminEmail?.trim())  return clientError(res, 400, "Admin email is required.");
-  if (!/\S+@\S+\.\S+/.test(adminEmail)) return clientError(res, 400, "Enter a valid email.");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(adminEmail)) return clientError(res, 400, "Enter a valid email.");
   if (!password)            return clientError(res, 400, "Password is required.");
   if (password.length < PASSWORD_MIN)
     return clientError(res, 400, `Password must be at least ${PASSWORD_MIN} characters.`);
@@ -158,7 +158,7 @@ export async function setupDirector(req, res) {
 
   if (!directorName?.trim()) return clientError(res, 400, "Director name is required.");
   if (!directorEmail?.trim()) return clientError(res, 400, "Director email is required.");
-  if (!/\S+@\S+\.\S+/.test(directorEmail)) return clientError(res, 400, "Enter a valid director email.");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(directorEmail)) return clientError(res, 400, "Enter a valid director email.");
 
   const org = await Organization.findOne({ orgId: req.org.orgId });
   if (!org) return clientError(res, 404, "Organization not found.");
