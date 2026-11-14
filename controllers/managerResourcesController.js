@@ -221,7 +221,7 @@ export async function createAsset(req, res) {
   const scope = await scopeOr404(req, res); if (!scope) return;
   const { errors, value } = validateAssetInput(req.body);
   if (Object.keys(errors).length) return res.status(400).json({ error: Object.values(errors)[0], fields: errors });
-  if (!await projectsInOrg(scope, value.projectIds)) return res.status(400).json({ error: "Pick projects from your organisation.", fields: { projectIds: "Pick projects from your organisation." } });
+  if (!await projectsInOrg(scope, value.projectIds)) return res.status(400).json({ error: "Pick projects from your organization.", fields: { projectIds: "Pick projects from your organization." } });
   const a = await Asset.create({ ...value, orgId: req.user.orgId, createdBy: req.user.id });
   log(scope, req, "asset_created", `Asset "${a.name}" (${a.type}) added.`);
   res.status(201).json(assetOut(a.toObject(), await projectTitles(scope)));
@@ -238,8 +238,8 @@ export async function updateAsset(req, res) {
   const a = await loadAsset(req, res, scope); if (!a) return;
   const { errors, value } = validateAssetInput({ type: a.type, ...req.body }, { partial: true });
   if (Object.keys(errors).length) return res.status(400).json({ error: Object.values(errors)[0], fields: errors });
-  if (!await projectsInOrg(scope, value.projectIds)) return res.status(400).json({ error: "Pick projects from your organisation.", fields: { projectIds: "Pick projects from your organisation." } });
-  if (value.type === "File link" && !(value.url ?? a.url)) return res.status(400).json({ error: "A file link needs the link.", fields: { url: "A file link needs the link." } });
+  if (!await projectsInOrg(scope, value.projectIds)) return res.status(400).json({ error: "Pick projects from your organization.", fields: { projectIds: "Pick projects from your organization." } });
+if (value.type === "File link" && !(value.url ?? a.url)) return res.status(400).json({ error: "A file link needs the link.", fields: { url: "A file link needs the link." } });
   Object.assign(a, value); await a.save();
   log(scope, req, "asset_updated", `Asset "${a.name}" updated.`);
   res.json(assetOut(a.toObject(), await projectTitles(scope)));
