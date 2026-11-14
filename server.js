@@ -265,7 +265,7 @@ const authEmailIpLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
   skipSuccessfulRequests: true,
-  keyGenerator: (req) => `${(req.body?.email ?? "").toLowerCase().trim()}:${ipKeyGenerator(req)}`,
+  keyGenerator: (req) => `${(req.body?.email ?? "").toLowerCase().trim()}:${ipKeyGenerator(req.ip)}`,
   message: { error: "Too many failed login attempts. Try again in 15 minutes." },
 });
 const authIpLimiter = rateLimit({
@@ -274,17 +274,25 @@ const authIpLimiter = rateLimit({
   skipSuccessfulRequests: true,
   message: { error: "Too many login attempts from this IP. Try again in 15 minutes." },
 });
-// Forgot/reset-password: keyed by email+IP, counts all requests (endpoint always 200 for security)
+// forgot-password: all requests count (endpoint always returns 200, anti-spam), max 3/15 min per email+IP
 const forgotPasswordLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
-  max: 5,
-  keyGenerator: (req) => `fp:${(req.body?.email ?? "").toLowerCase().trim()}:${ipKeyGenerator(req)}`,
+  max: 3,
+  keyGenerator: (req) => `fp:${(req.body?.email ?? "").toLowerCase().trim()}:${ipKeyGenerator(req.ip)}`,
   message: { error: "Too many password reset requests. Try again in 15 minutes." },
+});
+// reset-password: only failed attempts count; the in-code lock (5 wrong → 15 min) is the real guard
+const resetPasswordLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  skipSuccessfulRequests: true,
+  keyGenerator: (req) => `rp:${(req.body?.email ?? "").toLowerCase().trim()}:${ipKeyGenerator(req.ip)}`,
+  message: { error: "Too many reset attempts. Try again in 15 minutes." },
 });
 app.use("/api/auth/login",           authEmailIpLimiter, authIpLimiter);
 app.use("/api/org/login",            authEmailIpLimiter, authIpLimiter);
 app.use("/api/auth/forgot-password", forgotPasswordLimiter);
-app.use("/api/auth/reset-password",  forgotPasswordLimiter);
+app.use("/api/auth/reset-password",  resetPasswordLimiter);
 
 // View as (D-109): before every route — view-as tokens only GET, and those GETs cannot write.
 app.use("/api", viewAsGuard);
