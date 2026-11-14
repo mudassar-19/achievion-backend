@@ -333,19 +333,25 @@ export async function getTeam(req, res) {
       { $match: { assignees: { $in: memberIds }, status: "Done" } },
       { $group: { _id: { $arrayElemAt: ["$assignees", 0] }, count: { $sum: 1 } } },
     ]),
-    // Org projects with member lists (name + members only, no AI scores)
-    Project.find({ director: { $in: dirIds }, status: { $ne: "Deleted" } }, "title members").lean(),
+    // Org projects with member lists + managerId
+    Project.find({ director: { $in: dirIds }, status: { $ne: "Deleted" } }, "title members managerId").lean(),
   ]);
 
   const profileMap = Object.fromEntries(profiles.map((p) => [p.userId.toString(), p]));
   const taskMap    = Object.fromEntries(taskCountAgg.map((t) => [t._id.toString(), t.count]));
 
-  // Build member → projects map
+  // Build member → projects map (includes manager via managerId even when not in members array)
   const memberProjectsMap = new Map(memberIds.map((id) => [id.toString(), []]));
   for (const p of orgProjects) {
     for (const memberId of (p.members ?? [])) {
       const key = memberId.toString();
       if (memberProjectsMap.has(key)) memberProjectsMap.get(key).push({ id: p._id, name: p.title });
+    }
+    if (p.managerId) {
+      const key = p.managerId.toString();
+      if (memberProjectsMap.has(key) && !memberProjectsMap.get(key).some((x) => String(x.id) === String(p._id))) {
+        memberProjectsMap.get(key).push({ id: p._id, name: p.title });
+      }
     }
   }
 
@@ -779,6 +785,17 @@ export async function adjustXp(req, res) {
 
   try {
     const result = await adjustUserXp({ directorId, userId: target._id, orgId, amount: amt, reason: r, adjustId });
+    // A7: non-blocking anomaly flag for large adjustments (|amount| >= 300)
+    if (!result.duplicate && Math.abs(amt) >= 300) {
+      AuditLog.create({
+        action:       "xp_adjust_flagged",
+        orgId,
+        performedBy:  directorId,
+        targetUserId: target._id,
+        scope:        "anomaly",
+        detail:       `Director XP adjustment of ${amt > 0 ? "+" : ""}${amt} flagged for review (threshold: ±300).`,
+      }).catch(() => {});
+    }
     res.json(result);
   } catch (err) {
     res.status(err.status ?? 500).json({ error: err.message });

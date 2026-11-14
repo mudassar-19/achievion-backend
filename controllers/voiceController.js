@@ -16,7 +16,7 @@ export async function createReport(req, res) {
   if (!subject?.trim() || !description?.trim())
     return res.status(400).json({ error: "subject and description required." });
 
-  const org = await Organization.findOne(orgFilter(orgId), "_id settings").lean();
+  const org = await Organization.findOne(orgFilter(orgId), "_id escalationContactId").lean();
   if (!org) return res.status(404).json({ error: "Org not found." });
 
   // Routing: complaint against a Director → escalationContact; else → Director(s)
@@ -24,7 +24,7 @@ export async function createReport(req, res) {
   if (targetId) {
     const target = await User.findById(targetId, "role").lean();
     if (target?.role === "Director") {
-      assignedTo = org.settings?.escalationContactId ?? null;
+      assignedTo = org.escalationContactId ?? null;
     }
   }
 
@@ -162,7 +162,7 @@ export async function updateReport(req, res) {
   if (!["escalate", "close", "resolve", "set_in_progress", "set_awaiting"].includes(action))
     return res.status(400).json({ error: "action must be escalate|close|resolve|set_in_progress|set_awaiting." });
 
-  const org = await Organization.findOne(orgFilter(orgId), "_id").lean();
+  const org = await Organization.findOne(orgFilter(orgId), "_id escalationContactId").lean();
   const report = await VoiceReport.findOne({ _id: req.params.id, orgId: org._id });
   if (!report) return res.status(404).json({ error: "Report not found." });
   if (report.status === "closed") return res.status(409).json({ error: "Report already closed." });
@@ -188,7 +188,7 @@ export async function updateReport(req, res) {
   if (action === "escalate") {
     const escalateTo = escalateToId
       ? new mongoose.Types.ObjectId(escalateToId)
-      : (org.settings?.escalationContactId ?? null);
+      : (org.escalationContactId ?? null);
     report.status      = "escalated";
     report.escalatedTo  = escalateTo;
     report.escalatedAt  = new Date();

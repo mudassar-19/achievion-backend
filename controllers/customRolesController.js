@@ -39,14 +39,18 @@ export async function addCustomRole(req, res) {
   const active = (org.customRoles ?? []).filter((r) => r.active);
   if (active.length >= MAX_ROLES) return res.status(409).json({ error: `Maximum ${MAX_ROLES} custom roles allowed.` });
 
+  const labLower = lab.toLowerCase();
+  if (active.some((r) => r.label.toLowerCase() === labLower)) {
+    return res.status(409).json({ error: "A custom role with this label already exists." });
+  }
+
   // Unique key: slugify label, append counter if collision
   let key = slugify(lab);
   const existing = new Set((org.customRoles ?? []).map((r) => r.key));
   if (existing.has(key)) key = `${key}_${Date.now().toString(36)}`;
 
   const role = { key, label: lab, category, active: true };
-  org.customRoles = [...(org.customRoles ?? []), role];
-  await org.save();
+  await Organization.updateOne(orgFilter(req.user.orgId), { $push: { customRoles: role } });
   audit(org._id, req.user.id, "custom_role_added", `Custom role "${lab}" (${category}) added.`);
   res.status(201).json({ customRole: role });
 }

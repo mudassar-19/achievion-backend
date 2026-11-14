@@ -30,14 +30,28 @@ export async function requestExtension(req, res) {
   const rules = org?.extensionRules ?? {};
 
   // Auto-apply threshold check
-  const existingCount = await ExtensionRequest.countDocuments({
-    taskId,
-    status: { $in: ["approved", "auto_applied"] },
-  });
+  const [existingCount, cumulativeDays] = await Promise.all([
+    ExtensionRequest.countDocuments({ taskId, status: { $in: ["approved", "auto_applied"] } }),
+    ExtensionRequest.aggregate([
+      { $match: { taskId: new mongoose.Types.ObjectId(String(taskId)), status: { $in: ["approved", "auto_applied"] } } },
+      { $group: { _id: null, total: { $sum: "$requestedDays" } } },
+    ]).then((r) => r[0]?.total ?? 0),
+  ]);
+
   const maxExtensions = rules.maxExtensionsPerTask ?? 3;
   const maxDays       = rules.extensionMaxDays ?? 30;
+  const maxPct        = rules.extensionMaxPct  ?? 20;
+  const maxCumCapPct  = rules.extensionCumCapPct ?? 20;
 
-  if (existingCount < maxExtensions && requestedDays <= maxDays) {
+  // Pct of original duration: if no deadline, origDays=0 → pctUsed=101 (auto-blocks, requires queuing)
+  const origDays = task.deadline && task.createdAt
+    ? Math.ceil((new Date(task.deadline) - new Date(task.createdAt)) / 86400000)
+    : 0;
+  const pctUsed    = origDays > 0 ? (requestedDays / origDays) * 100 : 101;
+  const cumDays    = cumulativeDays + requestedDays;
+  const cumPctUsed = origDays > 0 ? (cumDays / origDays) * 100 : 101;
+
+  if (existingCount < maxExtensions && requestedDays <= maxDays && pctUsed <= maxPct && cumPctUsed <= maxCumCapPct) {
     // Auto-apply: update task deadline
     const newDeadline = task.deadline
       ? new Date(task.deadline.getTime() + requestedDays * 86400000)

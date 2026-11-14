@@ -30,9 +30,10 @@ export function validateTaskInput(body = {}, { mode = "create" } = {}) {
   if (has("estimatedHours")) {
     const raw = body.estimatedHours, h = Number(raw);
     if (raw === "" || raw === null || raw === undefined || Number.isNaN(h)) errors.estimatedHours = "Give an estimate in hours (1 to 14).";
+    else if (!Number.isInteger(h)) errors.estimatedHours = "Hours must be a whole number (1 to 14).";
     else if (h < MIN_HOURS) errors.estimatedHours = "Estimate 1 to 14 hours. Smaller work: merge it into another task.";
     else if (h > MAX_HOURS) errors.estimatedHours = "Estimate 1 to 14 hours. Bigger work: split it into smaller tasks.";
-    else value.estimatedHours = Math.round(h * 4) / 4;
+    else value.estimatedHours = h;
   }
   if (body.xpValue !== undefined && body.xpValue !== "" && body.xpValue !== null) {
     const x = Number(body.xpValue);

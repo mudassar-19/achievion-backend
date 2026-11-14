@@ -29,7 +29,7 @@ const approvalSchema = new Schema(
 
     status: {
       type:    String,
-      enum:    ["PENDING", "APPROVED", "REJECTED", "VOID"],
+      enum:    ["PENDING", "APPROVED", "REJECTED", "VOID", "EXPIRED"],
       default: "PENDING",
       index:   true,
     },

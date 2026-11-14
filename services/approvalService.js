@@ -29,10 +29,23 @@ export async function createApprovalRequest({
   targetEmployeeId = null,
   payload,
 }) {
-  // Persist the approval; SUSPEND_EMPLOYEE approvals expire in 72h
+  // Block duplicate PENDING approval for same target + actionType
+  if (targetEmployeeId) {
+    const dup = await Approval.findOne({ orgId, actionType, targetEmployeeId, status: "PENDING" }).lean();
+    if (dup) {
+      const err = new Error(`A PENDING ${actionType} approval for this employee already exists.`);
+      err.status = 409;
+      throw err;
+    }
+  }
+
+  // SUSPEND_EMPLOYEE: 72h; all other modifying types: 7 days; informational (TASK_ASSIGNMENT): no expiry
+  const SEVEN_DAYS = 7 * 24 * 60 * 60 * 1000;
   const expiresAt = actionType === "SUSPEND_EMPLOYEE"
     ? new Date(Date.now() + 72 * 60 * 60 * 1000)
-    : null;
+    : ["CREATE_EMPLOYEE", "DELETE_EMPLOYEE", "REACTIVATE_EMPLOYEE", "ROLE_CHANGE"].includes(actionType)
+      ? new Date(Date.now() + SEVEN_DAYS)
+      : null;
 
   const approval = await Approval.create({
     orgId,
@@ -55,7 +68,8 @@ export async function createApprovalRequest({
     await Notification.create({
       userId:  director._id,
       orgId:   String(orgId),
-      type:    "approval_required",
+      type:    "approval_pending",
+      tier:    "needs_action",
       message: `New ${actionType} request pending your approval${suspendReason}`,
       meta:    { approvalId: approval._id },
     });
@@ -230,9 +244,9 @@ export async function executeApproval(approvalId, approverId = null) {
   if (approverId) approval.resolvedBy = approverId;
   await approval.save();
 
-  // Mark the Director's approval_required notification for this request as read
+  // Mark the Director's approval notification as read (matches both old and new type name)
   await Notification.updateMany(
-    { "meta.approvalId": approval._id, type: "approval_required", read: false },
+    { "meta.approvalId": approval._id, type: { $in: ["approval_required", "approval_pending"] }, read: false },
     { $set: { read: true } }
   );
 
@@ -298,9 +312,9 @@ export async function rejectApproval(approvalId, rejectionReason = null, approve
   if (approverId) approval.resolvedBy = approverId;
   await approval.save();
 
-  // Mark the Director's approval_required notification for this request as read
+  // Mark the Director's approval notification as read (matches both old and new type name)
   await Notification.updateMany(
-    { "meta.approvalId": approval._id, type: "approval_required", read: false },
+    { "meta.approvalId": approval._id, type: { $in: ["approval_required", "approval_pending"] }, read: false },
     { $set: { read: true } }
   );
 

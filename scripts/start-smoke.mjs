@@ -16,6 +16,7 @@ if (env.MONGO_URI) {
 }
 env.PORT = process.env.LAUNCH_PORT || "5057";
 env.CLIENT_URL = process.env.LAUNCH_CLIENT_URL || "http://localhost:5176";
+env.TRUST_PROXY = "1"; // allow X-Forwarded-For from tests so each test run gets its own rate-limit bucket
 // Optional: clear Cloudinary
 if (process.env.NO_CLOUDINARY) {
   env.CLOUDINARY_CLOUD_NAME = "";

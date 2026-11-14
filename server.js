@@ -251,6 +251,19 @@ app.use(
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// ISS-014: strip null bytes from all string values in request body (recursive).
+function stripNullBytes(val) {
+  if (typeof val === "string") return val.replace(/\u0000/g, "");
+  if (Array.isArray(val)) return val.map(stripNullBytes);
+  if (val && typeof val === "object") {
+    const out = {};
+    for (const k of Object.keys(val)) out[k] = stripNullBytes(val[k]);
+    return out;
+  }
+  return val;
+}
+app.use((req, _res, next) => { if (req.body) req.body = stripNullBytes(req.body); next(); });
+
 // Serve project attachment uploads
 // S-1 (D-157): only through a signed link from GET /api/files/sign.
 app.use("/uploads", requireSignedFile, express.static(path.resolve(process.cwd(), "uploads"), { cacheControl: false, dotfiles: "deny", index: false, redirect: false }));
@@ -265,7 +278,7 @@ const authEmailIpLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
   skipSuccessfulRequests: true,
-  keyGenerator: (req) => `${(req.body?.email ?? "").toLowerCase().trim()}:${ipKeyGenerator(req.ip)}`,
+  keyGenerator: (req) => `${String(req.body?.email ?? "").toLowerCase().trim()}:${ipKeyGenerator(req.ip)}`,
   message: { error: "Too many failed login attempts. Try again in 15 minutes." },
 });
 const authIpLimiter = rateLimit({
@@ -278,7 +291,7 @@ const authIpLimiter = rateLimit({
 const forgotPasswordLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 3,
-  keyGenerator: (req) => `fp:${(req.body?.email ?? "").toLowerCase().trim()}:${ipKeyGenerator(req.ip)}`,
+  keyGenerator: (req) => `fp:${String(req.body?.email ?? "").toLowerCase().trim()}:${ipKeyGenerator(req.ip)}`,
   message: { error: "Too many password reset requests. Try again in 15 minutes." },
 });
 // reset-password: only failed attempts count; the in-code lock (5 wrong → 15 min) is the real guard
@@ -286,7 +299,7 @@ const resetPasswordLimiter = rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 10,
   skipSuccessfulRequests: true,
-  keyGenerator: (req) => `rp:${(req.body?.email ?? "").toLowerCase().trim()}:${ipKeyGenerator(req.ip)}`,
+  keyGenerator: (req) => `rp:${String(req.body?.email ?? "").toLowerCase().trim()}:${ipKeyGenerator(req.ip)}`,
   message: { error: "Too many reset attempts. Try again in 15 minutes." },
 });
 app.use("/api/auth/login",           authEmailIpLimiter, authIpLimiter);
@@ -377,6 +390,9 @@ async function start() {
     console.log(`[Server] Listening on 0.0.0.0:${PORT}`);
   });
 }
+
+process.on("uncaughtException",  (err) => console.error("[uncaughtException]",  err));
+process.on("unhandledRejection", (err) => console.error("[unhandledRejection]", err));
 
 start().catch((err) => {
   console.error("[Fatal] Failed to start server:", err.message);

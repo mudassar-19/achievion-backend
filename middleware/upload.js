@@ -7,6 +7,7 @@ import { SUBMISSION_FORMATS, isAllowedSubmissionFile, stripCloudinarySignature }
 import { uploadError } from "../services/submitRules.js";
 import { createFileStore } from "../services/fileStore.js";
 import { makeAttachmentUpload } from "./attachmentUpload.js";
+import { sniffAttachment } from "../services/attachmentRules.js";
 
 // ── Detect whether Cloudinary is properly configured ─────────────────────────
 const PLACEHOLDER_RE = /^your_/i;
@@ -58,13 +59,47 @@ export const upload = multer({
   },
 });
 
+// Magic-bytes check for disk-stored submission files (ISS-017/018).
+// For each uploaded file, reject empty files and files whose bytes don't match a known type.
+// MAGIC_EXTS: exts that have a detectable signature; txt/md/csv are text-only (no sniff).
+const MAGIC_EXTS = new Set(["pdf", "png", "jpg", "jpeg", "docx", "zip", "xlsx"]);
+function checkSubmissionMagic(files = []) {
+  for (const f of files) {
+    const ext = /\.([^.]+)$/.exec(f.originalname)?.[1]?.toLowerCase() ?? "";
+    if (f.size === 0) return `"${f.originalname}" is empty.`;
+    if (!MAGIC_EXTS.has(ext) || /^https?:\/\//.test(f.path ?? "")) continue; // skip text types and Cloudinary files
+    try {
+      const fd = fs.openSync(f.path, "r");
+      const buf = Buffer.alloc(4096);
+      const read = fs.readSync(fd, buf, 0, 4096, 0);
+      fs.closeSync(fd);
+      const type = sniffAttachment(buf.subarray(0, read));
+      const expected = ext === "xlsx" ? "docx" : ext === "jpeg" ? "jpg" : ext; // xlsx is also zip/docx container
+      if (!type || (expected !== "zip" && type !== expected)) {
+        return `"${f.originalname}" does not look like a real ${ext.toUpperCase()} file.`;
+      }
+    } catch { /* if we can't read the file, skip — multer already accepted it */ }
+  }
+  return null;
+}
+
 // Submission-type files (D-164, D-165) with clear 400s (E-3: multer limit errors carried no status → 500). Used by the
 // employee composer and the E-4 Quality forms (bug files, QA evidence).
 export const uploadFiles = (req, res, next) => needStorage(req, res, () => upload.array("files", 5)(req, res, (err) => {
-  if (!err) return next();
-  const e = uploadError(err);
-  if (e.status === 500) console.error("[upload]", err.message);
-  res.status(e.status).json({ error: e.error, field: e.field });
+  if (err) {
+    const e = uploadError(err);
+    if (e.status === 500) console.error("[upload]", err.message);
+    return res.status(e.status).json({ error: e.error, field: e.field });
+  }
+  const magicErr = checkSubmissionMagic(req.files ?? []);
+  if (magicErr) {
+    // Clean up disk files that failed the check
+    for (const f of (req.files ?? [])) {
+      if (f.path && !/^https?:\/\//.test(f.path)) fs.unlink(f.path, () => {});
+    }
+    return res.status(400).json({ error: magicErr });
+  }
+  next();
 }));
 // Where a stored file is opened from: Cloudinary URL without its permanent signature (S-2), or the signed /uploads path (S-1).
 export const storedFile = (f) => ({ name: f.originalname, url: /^https?:\/\//.test(f.path ?? "") ? stripCloudinarySignature(f.path) : `/uploads/submissions/${f.filename}`, size: f.size || 0 });

@@ -88,7 +88,7 @@ const auditLogSchema = new Schema(
     after:      { type: Schema.Types.Mixed, default: null },
     ip:         { type: String, default: null },
     device:     { type: String, default: null },
-    scope:      { type: String, enum: ["org","project","account","settings","voice","risk","goal","report","extension","session","chat"], default: "org" },
+    scope:      { type: String, enum: ["org","project","account","settings","voice","risk","goal","report","extension","session","chat","anomaly"], default: "org" },
     actionHash: { type: String, default: null },
   },
   {

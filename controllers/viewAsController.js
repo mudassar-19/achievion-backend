@@ -1,6 +1,7 @@
 // View as (AUTH-11, M-8, D-109). A Director or Manager gets a 30-minute read-only token for a target in scope.
 // Rules: services/viewAsRules.js. Read-only enforcement: middleware/viewAs.js (request guard + write block).
 import jwt from "jsonwebtoken";
+import crypto from "node:crypto";
 import mongoose from "mongoose";
 import User from "../models/User.js";
 import Project from "../models/Project.js";
@@ -54,7 +55,7 @@ export async function start(req, res) {
   if (blocked) return res.status(blocked.status).json({ error: blocked.error });
   const viewer = await User.findById(req.user.id, "name role tokenVersion").lean();
   const claims = viewAsClaims({ viewer, target });
-  const token = jwt.sign(claims, process.env.JWT_SECRET, { expiresIn: `${VIEW_AS_MINUTES}m` });
+  const token = jwt.sign({ ...claims, jti: crypto.randomUUID() }, process.env.JWT_SECRET, { expiresIn: `${VIEW_AS_MINUTES}m` });
   const expiresAt = new Date(Date.now() + VIEW_AS_MINUTES * 60_000);
   audit(req, "view_as_started", viewer._id, target, `${viewer.name} (${viewer.role}) started viewing as ${target.name} (${target.role}), read-only, until ${expiresAt.toISOString()}.`);
   res.json({ token, expiresAt, viewAs: { ...claims.viewAs, targetId: claims.id, targetName: target.name, targetRole: target.role, expiresAt } });

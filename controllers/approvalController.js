@@ -4,6 +4,16 @@ import User             from "../models/User.js";
 import * as approvalSvc from "../services/approvalService.js";
 import mongoose          from "mongoose";
 
+// Strip hashed credentials from approval payload before sending to client (ISS-022).
+function sanitizeApproval(doc) {
+  const a = doc.toObject ? doc.toObject() : { ...doc };
+  if (a.payload) {
+    const { password, passwordHash, resetCodeHash, ...rest } = a.payload;
+    a.payload = rest;
+  }
+  return a;
+}
+
 // ── helper: resolve org ObjectId from the Director's string orgId ─────────────
 // Supports both the orgId code string ("ORG-XXXXXX") and raw ObjectId strings
 // (legacy Directors created before the orgId-fix were stored with ObjectId).
@@ -26,6 +36,12 @@ export async function getPendingApprovals(req, res) {
   const orgObjectId = await resolveOrgObjectId(req.user.orgId);
   if (!orgObjectId) return res.status(404).json({ error: "Organization not found." });
 
+  // Lazily expire approvals whose window has passed before returning the pending list
+  await Approval.updateMany(
+    { orgId: orgObjectId, status: "PENDING", expiresAt: { $lt: new Date() } },
+    { $set: { status: "EXPIRED" } }
+  );
+
   const approvals = await Approval.find({
     orgId:  orgObjectId,
     status: "PENDING",
@@ -34,7 +50,7 @@ export async function getPendingApprovals(req, res) {
     .populate("targetEmployeeId", "name email role")
     .sort({ createdAt: -1 });
 
-  res.json({ approvals });
+  res.json({ approvals: approvals.map(sanitizeApproval) });
 }
 
 // ── getApprovalHistory ────────────────────────────────────────────────────────
@@ -50,7 +66,14 @@ export async function getApprovalHistory(req, res) {
 
   const filter = { orgId: orgObjectId };
   const { status } = req.query;
-  if (status && ["PENDING", "APPROVED", "REJECTED"].includes(status.toUpperCase())) {
+  if (status && ["PENDING", "APPROVED", "REJECTED", "EXPIRED"].includes(status.toUpperCase())) {
+    if (status.toUpperCase() === "EXPIRED") {
+      // Lazy expiry: mark and return expired PENDING approvals
+      await Approval.updateMany(
+        { orgId: orgObjectId, status: "PENDING", expiresAt: { $lt: new Date() } },
+        { $set: { status: "EXPIRED" } }
+      );
+    }
     filter.status = status.toUpperCase();
   }
 
@@ -60,7 +83,7 @@ export async function getApprovalHistory(req, res) {
     .populate("resolvedBy",       "name role")
     .sort({ createdAt: -1 });
 
-  res.json({ approvals });
+  res.json({ approvals: approvals.map(sanitizeApproval) });
 }
 
 // ── approveRequest ────────────────────────────────────────────────────────────
@@ -114,7 +137,10 @@ export async function rejectRequest(req, res) {
     }
   }
 
-  const rejectionReason = req.body.reason ?? null;
+  const rejectionReason = req.body.reason?.trim() || null;
+  if (!rejectionReason && ["SUSPEND_EMPLOYEE", "DELETE_EMPLOYEE"].includes(approval.actionType)) {
+    return res.status(400).json({ error: "A reason is required when rejecting SUSPEND or DELETE requests." });
+  }
   await approvalSvc.rejectApproval(req.params.id, rejectionReason, req.user._id ?? req.user.id);
   res.json({ success: true, message: "Request rejected" });
 }

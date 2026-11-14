@@ -3,6 +3,7 @@ import User         from "../models/User.js";
 import AuditLog     from "../models/AuditLog.js";
 import mongoose     from "mongoose";
 import jwt          from "jsonwebtoken";
+import crypto       from "node:crypto";
 import { ROLE_CATEGORY_MAP } from "../models/User.js";
 
 function signToken(user) {
@@ -15,6 +16,7 @@ function signToken(user) {
       name:         user.name,
       orgId:        user.orgId ?? null,
       tokenVersion: user.tokenVersion ?? 0,
+      jti:          crypto.randomUUID(),
     },
     process.env.JWT_SECRET,
     { expiresIn: process.env.JWT_EXPIRES_IN ?? "7d" }

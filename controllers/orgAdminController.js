@@ -120,7 +120,10 @@ export async function listCustomRolesForOrg(req, res) {
 // ── POST /api/org/employees/create ────────────────────────────────────────────
 export async function createEmployee(req, res) {
   const { orgId, orgDbId } = req.org;
-  const { name, email, role = "Developer", department, roleLabel } = req.body ?? {};
+  const { name, email, role = "Developer", roleLabel } = req.body ?? {};
+  // Auto-assign department from role if not provided
+  const ROLE_DEPT = { Developer: "Development", Designer: "Design", Tester: "QA", "Team Lead": "Development" };
+  const department = req.body.department?.trim() || ROLE_DEPT[role] || null;
 
   // Validation
   if (!name?.trim() || !email?.trim()) {

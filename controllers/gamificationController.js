@@ -256,11 +256,12 @@ export async function getLeaderboard(req, res) {
   const since = period === "week" ? weekAgo : period === "month" ? monthStart : null;
   const [weekXp, doneAgg] = await Promise.all([
     XpLog.aggregate([{ $match: { userId: { $in: userIds }, createdAt: { $gte: weekAgo }, amount: { $gt: 0 } } }, { $group: { _id: "$userId", xp: { $sum: "$amount" } } }]),
-    since ? Task.aggregate([
-      { $match: { assignees: { $in: userIds }, status: "Done", completedAt: { $gte: since } } }, { $unwind: "$assignees" }, { $match: { assignees: { $in: userIds } } },
+    Task.aggregate([
+      { $match: { assignees: { $in: userIds }, status: "Done", ...(since ? { completedAt: { $gte: since } } : {}) } },
+      { $unwind: "$assignees" }, { $match: { assignees: { $in: userIds } } },
       { $group: { _id: "$assignees", done: { $sum: 1 }, judged: { $sum: { $cond: [{ $ifNull: ["$deadline", false] }, 1, 0] } },
         onTime: { $sum: { $cond: [{ $and: [{ $ifNull: ["$deadline", false] }, { $lte: ["$completedAt", "$deadline"] }] }, 1, 0] } } } },
-    ]) : [],
+    ]),
   ]);
   const wk = new Map(weekXp.map((r) => [String(r._id), r.xp]));
   const done = new Map(doneAgg.map((r) => [String(r._id), r]));
@@ -270,9 +271,8 @@ export async function getLeaderboard(req, res) {
     const totalXp = p.totalXp ?? 0, weeklyXp = wk.get(uid) ?? 0, monthlyXp = p.monthlyXp ?? 0;
     const xp = period === "week" ? weeklyXp : period === "month" ? monthlyXp : totalXp;
     const d = done.get(uid);
-    const tasksCompleted = since ? (d?.done ?? 0) : (p.stats?.tasksCompleted ?? 0);
-    const onTimePct = since ? (d?.judged ? Math.round((d.onTime / d.judged) * 100) : null)
-      : (p.stats?.tasksCompleted ? Math.round(((p.stats?.onTimeDeliveries ?? 0) / p.stats.tasksCompleted) * 100) : null);
+    const tasksCompleted = d?.done ?? 0;
+    const onTimePct = d?.judged ? Math.round((d.onTime / d.judged) * 100) : null;
     // Batch 3 (E4): public fields only, with the avatar the person equipped (else the default).
     return publicRow({ userId: uid, name: u.name ?? "—", role: u.role ?? "", roleLabel: u.roleLabel ?? null, avatarStyle: p.avatarStyle, avatarSeed: p.avatarSeed ?? null, level: p.level ?? 1,
       xp, rankXp: xp, totalXp, monthlyXp, weeklyXp, tasksCompleted, onTimePct, completionRate: onTimePct ?? 0,

@@ -32,6 +32,7 @@ function signToken(user) {
       name:         user.name,
       orgId:        user.orgId ?? null,
       tokenVersion: user.tokenVersion ?? 0,
+      jti:          crypto.randomUUID(),
     },
     process.env.JWT_SECRET,
     { expiresIn: process.env.JWT_EXPIRES_IN ?? "7d" }
@@ -74,7 +75,10 @@ function clientError(res, status, message) {
 export async function register(req, res) {
   const { name, email, password, role } = req.body ?? {};
 
-  if (!name?.trim() || !email?.trim() || !password || !role) {
+  if (typeof name !== "string" || typeof email !== "string" || typeof password !== "string" || typeof role !== "string") {
+    return clientError(res, 400, "Invalid input.");
+  }
+  if (!name.trim() || !email.trim() || !password || !role) {
     return clientError(res, 400, "name, email, password, and role are all required.");
   }
 
@@ -110,7 +114,10 @@ export async function register(req, res) {
 export async function login(req, res) {
   const { email, password, orgCode } = req.body ?? {};
 
-  if (!email?.trim() || !password) {
+  if (typeof email !== "string" || typeof password !== "string" || (orgCode !== undefined && typeof orgCode !== "string")) {
+    return clientError(res, 400, "Invalid input.");
+  }
+  if (!email.trim() || !password) {
     return clientError(res, 400, "Email and password are required.");
   }
   if (!orgCode?.trim()) {
@@ -135,6 +142,9 @@ export async function login(req, res) {
   const match = await bcrypt.compare(password, user.password);
   if (!match) return clientError(res, 401, "Invalid email or password.");
 
+  if (user.status === "deleted") {
+    return clientError(res, 401, "Invalid email or password.");
+  }
   if (user.status === "suspended") {
     return clientError(res, 403, "Account suspended. Contact your administrator.");
   }

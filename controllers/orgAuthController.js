@@ -44,6 +44,7 @@ function signOrgToken(org) {
       role:    "org_admin",
       type:    "org",
       name:    org.name,
+      jti:     crypto.randomUUID(),
     },
     process.env.JWT_SECRET,
     { expiresIn: process.env.JWT_EXPIRES_IN ?? "7d" }
@@ -106,6 +107,12 @@ export async function registerOrg(req, res) {
       directorSetupComplete: false,
     }], { session });
 
+    await Organization.updateOne(
+      { _id: org._id },
+      { $set: { departments: ["Development", "Design", "QA"] } },
+      { session }
+    );
+
     await AuditLog.create([{
       action:      "ORG_CREATED",
       orgId:       org._id,
@@ -130,7 +137,10 @@ export async function registerOrg(req, res) {
 export async function loginOrg(req, res) {
   const { email, password } = req.body ?? {};
 
-  if (!email?.trim() || !password)
+  if (typeof email !== "string" || typeof password !== "string") {
+    return clientError(res, 400, "Invalid input.");
+  }
+  if (!email.trim() || !password)
     return clientError(res, 400, "Email and password are required.");
 
   try {
