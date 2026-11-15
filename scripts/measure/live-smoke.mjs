@@ -2,17 +2,22 @@
  * Live smoke test — 4 checks against the deployed backend.
  * Usage: node server/scripts/measure/live-smoke.mjs
  *
- * Reads credentials from .env.test (never printed/committed).
- * Backend URL: LIVE_BACKEND_URL env var, or add it to .env.test.
- * Example: LIVE_BACKEND_URL=https://achievion-backend.onrender.com node ...
+ * Reads credentials from .env.live (live DB accounts) then .env.test.
+ * Backend URL: LIVE_BACKEND_URL env var, or in .env.live.
+ * Example: node server/scripts/measure/live-smoke.mjs
  */
-import { readFileSync } from "node:fs";
+import { readFileSync, existsSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
-for (const l of readFileSync(path.join(root, ".env.test"), "utf8").split("\n")) {
-  const i = l.indexOf("="); if (i > 0 && !l.startsWith("#") && !process.env[l.slice(0, i)]) process.env[l.slice(0, i)] = l.slice(i + 1).trim();
+// Load .env.live first (live credentials take precedence), then .env.test as fallback
+for (const f of [".env.live", ".env.test"]) {
+  const fp = path.join(root, f);
+  if (!existsSync(fp)) continue;
+  for (const l of readFileSync(fp, "utf8").split("\n")) {
+    const i = l.indexOf("="); if (i > 0 && !l.startsWith("#") && !process.env[l.slice(0, i)]) process.env[l.slice(0, i)] = l.slice(i + 1).trim();
+  }
 }
 
 const BASE = process.env.LIVE_BACKEND_URL?.replace(/\/$/, "");
@@ -32,11 +37,11 @@ const row = (check, expected, actual, pass) => results.push({ check, expected, a
   row("health GET /api/health", "200", String(r.status), r.status === 200);
 }
 
-// (b) Login
+// (b) Login — Director (for approvals check)
 {
-  const email = process.env.DIRECTOR_EMAIL;
-  const password = process.env.DIRECTOR_PASSWORD ?? process.env.RESET_TEST_PASSWORD;
-  const orgCode = process.env.ORG_CODE;
+  const email = process.env.LIVE_DIRECTOR_EMAIL ?? process.env.DIRECTOR_EMAIL;
+  const password = process.env.LIVE_DIRECTOR_PASSWORD ?? process.env.DIRECTOR_PASSWORD ?? process.env.RESET_TEST_PASSWORD;
+  const orgCode = process.env.LIVE_ORG_CODE ?? process.env.ORG_CODE;
   const r = await fetch(`${BASE}/api/auth/login`, {
     method: "POST",
     headers: { "content-type": "application/json" },
@@ -58,31 +63,33 @@ const row = (check, expected, actual, pass) => results.push({ check, expected, a
   }
 }
 
-// (d) Fake .pdf upload → 400
-// Uses POST /api/quality/bugs (Tester-accessible) so auth passes and magic-bytes check fires.
-// Login as Tester for this check.
+// (d) Fake .pdf upload → exactly 400 with app error message (FIX-4 D-430 magic-bytes check).
+// Uses SENDEV token (workspace user) so auth passes; magic check fires before task lookup.
 {
-  const tEmail = process.env.TESTER_EMAIL;
-  const tPass  = process.env.TESTER_PASSWORD ?? process.env.RESET_TEST_PASSWORD;
-  const orgCode = process.env.ORG_CODE;
-  let tToken = null;
-  try {
+  const sendevEmail = process.env.LIVE_SENDEV_EMAIL;
+  const sendevPw = process.env.LIVE_SENDEV_PASSWORD;
+  const orgCode = process.env.LIVE_ORG_CODE ?? process.env.ORG_CODE;
+  let sendevToken = null;
+  if (sendevEmail && sendevPw) {
     const lr = await fetch(`${BASE}/api/auth/login`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email: tEmail, password: tPass, orgCode }),
+      method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ email: sendevEmail, password: sendevPw, orgCode }),
     });
-    tToken = lr.ok ? (await lr.json()).token : null;
-  } catch { /* skip */ }
-
+    if (lr.ok) sendevToken = (await lr.json()).token;
+  }
+  const authToken = sendevToken ?? token; // fallback to Director if SENDEV not in .env.live
   const form = new FormData();
   form.append("files", new Blob(["this is not a pdf"], { type: "application/pdf" }), "test.pdf");
-  const r = await fetch(`${BASE}/api/quality/bugs`, {
+  const r = await fetch(`${BASE}/api/workspace/tasks/000000000000000000000001/submit`, {
     method: "POST",
-    headers: tToken ? { authorization: `Bearer ${tToken}` } : {},
+    headers: authToken ? { authorization: `Bearer ${authToken}` } : {},
     body: form,
   });
-  row("fake .pdf upload POST /api/quality/bugs", "400", String(r.status), r.status === 400);
+  const body = r.status < 500 ? await r.json().catch(() => ({})) : {};
+  // Must be EXACTLY 400 with the app's magic-bytes error message
+  const hasMsg = typeof body?.error === "string" && body.error.length > 0;
+  const pass = r.status === 400 && hasMsg;
+  row("fake .pdf upload (magic-bytes → app 400)", "400 + error msg", `${r.status}${hasMsg ? ` "${body.error?.slice(0, 40)}"` : ""}`, pass);
 }
 
 // Print table

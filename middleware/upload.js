@@ -1,7 +1,6 @@
 import multer from "multer";
 import path   from "path";
 import fs     from "fs";
-import { CloudinaryStorage } from "multer-storage-cloudinary";
 import cloudinary from "../config/cloudinary.js";
 import { SUBMISSION_FORMATS, isAllowedSubmissionFile, stripCloudinarySignature } from "../services/accessRules.js";
 import { uploadError } from "../services/submitRules.js";
@@ -24,30 +23,9 @@ if (!fs.existsSync(SUBMISSIONS_DIR)) {
   fs.mkdirSync(SUBMISSIONS_DIR, { recursive: true });
 }
 
-let uploadStorage;
-if (cloudinaryConfigured) {
-  uploadStorage = new CloudinaryStorage({
-    cloudinary,
-    params: async (req, file) => ({
-      folder:          `achievion/${req.user?.orgId}/submissions`,
-      allowed_formats: SUBMISSION_FORMATS,
-      resource_type:   "auto",
-      type:            "authenticated", // S-2 (D-164): private; opened only through GET /api/files/sign
-      use_filename:    true,
-      unique_filename: true,
-      filename_override: file.originalname,
-    }),
-  });
-} else {
-  // Fallback: store submissions on disk when Cloudinary creds are not set
-  uploadStorage = multer.diskStorage({
-    destination: (_req, _file, cb) => cb(null, SUBMISSIONS_DIR),
-    filename:    (_req, file, cb) => {
-      const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
-      cb(null, `${unique}${path.extname(file.originalname).toLowerCase()}`);
-    },
-  });
-}
+// Always buffer in memory first so magic-bytes check runs before any Cloudinary upload (FIX-4 D-430).
+// After the check passes, uploadFiles persists to Cloudinary or disk below.
+const uploadStorage = multer.memoryStorage();
 
 export const upload = multer({
   storage: uploadStorage,
@@ -59,45 +37,55 @@ export const upload = multer({
   },
 });
 
-// Magic-bytes check for disk-stored submission files (ISS-017/018).
-// For each uploaded file, reject empty files and files whose bytes don't match a known type.
-// MAGIC_EXTS: exts that have a detectable signature; txt/md/csv are text-only (no sniff).
+// Magic-bytes check for submission files (ISS-017/018, FIX-4 D-430).
+// Always reads from f.buffer (memory storage) so the check fires before any Cloudinary upload.
 const MAGIC_EXTS = new Set(["pdf", "png", "jpg", "jpeg", "docx", "zip", "xlsx"]);
 function checkSubmissionMagic(files = []) {
   for (const f of files) {
     const ext = /\.([^.]+)$/.exec(f.originalname)?.[1]?.toLowerCase() ?? "";
-    if (f.size === 0) return `"${f.originalname}" is empty.`;
-    if (!MAGIC_EXTS.has(ext) || /^https?:\/\//.test(f.path ?? "")) continue; // skip text types and Cloudinary files
-    try {
-      const fd = fs.openSync(f.path, "r");
-      const buf = Buffer.alloc(4096);
-      const read = fs.readSync(fd, buf, 0, 4096, 0);
-      fs.closeSync(fd);
-      const type = sniffAttachment(buf.subarray(0, read));
-      const expected = ext === "xlsx" ? "docx" : ext === "jpeg" ? "jpg" : ext; // xlsx is also zip/docx container
-      if (!type || (expected !== "zip" && type !== expected)) {
-        return `"${f.originalname}" does not look like a real ${ext.toUpperCase()} file.`;
-      }
-    } catch { /* if we can't read the file, skip — multer already accepted it */ }
+    const buf = f.buffer;
+    if (!buf || buf.length === 0) return `"${f.originalname}" is empty.`;
+    if (!MAGIC_EXTS.has(ext)) continue; // txt/md/csv: text types, no binary signature
+    const type = sniffAttachment(buf.subarray(0, 4096));
+    const expected = ext === "xlsx" ? "docx" : ext === "jpeg" ? "jpg" : ext;
+    if (!type || (expected !== "zip" && type !== expected)) {
+      return `"${f.originalname}" does not look like a real ${ext.toUpperCase()} file.`;
+    }
   }
   return null;
 }
 
 // Submission-type files (D-164, D-165) with clear 400s (E-3: multer limit errors carried no status → 500). Used by the
 // employee composer and the E-4 Quality forms (bug files, QA evidence).
-export const uploadFiles = (req, res, next) => needStorage(req, res, () => upload.array("files", 5)(req, res, (err) => {
+// FIX-4 (D-430): memory → magic check → then persist (Cloudinary or disk). Cloudinary is never called for rejected files.
+export const uploadFiles = (req, res, next) => needStorage(req, res, () => upload.array("files", 5)(req, res, async (err) => {
   if (err) {
     const e = uploadError(err);
     if (e.status === 500) console.error("[upload]", err.message);
     return res.status(e.status).json({ error: e.error, field: e.field });
   }
   const magicErr = checkSubmissionMagic(req.files ?? []);
-  if (magicErr) {
-    // Clean up disk files that failed the check
-    for (const f of (req.files ?? [])) {
-      if (f.path && !/^https?:\/\//.test(f.path)) fs.unlink(f.path, () => {});
+  if (magicErr) return res.status(400).json({ error: magicErr });
+
+  // Persist buffers to Cloudinary or disk after the check passes
+  try {
+    for (const f of req.files ?? []) {
+      if (cloudinaryConfigured) {
+        const result = await new Promise((ok, no) => cloudinary.uploader.upload_stream(
+          { folder: `achievion/${req.user?.orgId}/submissions`, allowed_formats: SUBMISSION_FORMATS, resource_type: "auto", type: "authenticated", use_filename: true, unique_filename: true, filename_override: f.originalname },
+          (e, r) => (e ? no(e) : ok(r))
+        ).end(f.buffer));
+        f.path = result.secure_url;
+      } else {
+        const unique = `${Date.now()}-${Math.round(Math.random() * 1e9)}`;
+        f.filename = `${unique}${path.extname(f.originalname).toLowerCase()}`;
+        f.path = path.join(SUBMISSIONS_DIR, f.filename);
+        fs.writeFileSync(f.path, f.buffer);
+      }
     }
-    return res.status(400).json({ error: magicErr });
+  } catch (e) {
+    console.error("[upload] persist failed:", e.message);
+    return res.status(502).json({ error: "File upload to storage failed." });
   }
   next();
 }));
