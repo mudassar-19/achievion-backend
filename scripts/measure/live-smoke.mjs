@@ -64,32 +64,35 @@ const row = (check, expected, actual, pass) => results.push({ check, expected, a
 }
 
 // (d) Fake .pdf upload → exactly 400 with app error message (FIX-4 D-430 magic-bytes check).
-// Uses SENDEV token (workspace user) so auth passes; magic check fires before task lookup.
+// Uses SENTES (tester) token: POST /api/quality/bugs has uploadFiles BEFORE task lookup.
+// (workspace routes use router.param scope guard that runs before uploadFiles — wrong endpoint)
 {
-  const sendevEmail = process.env.LIVE_SENDEV_EMAIL;
-  const sendevPw = process.env.LIVE_SENDEV_PASSWORD;
+  const sentesEmail = process.env.LIVE_SENTES_EMAIL;
+  const sentesPw = process.env.LIVE_SENTES_PASSWORD;
   const orgCode = process.env.LIVE_ORG_CODE ?? process.env.ORG_CODE;
-  let sendevToken = null;
-  if (sendevEmail && sendevPw) {
+  let sentesToken = null;
+  if (sentesEmail && sentesPw) {
     const lr = await fetch(`${BASE}/api/auth/login`, {
       method: "POST", headers: { "content-type": "application/json" },
-      body: JSON.stringify({ email: sendevEmail, password: sendevPw, orgCode }),
+      body: JSON.stringify({ email: sentesEmail, password: sentesPw, orgCode }),
     });
-    if (lr.ok) sendevToken = (await lr.json()).token;
+    if (lr.ok) sentesToken = (await lr.json()).token;
   }
-  const authToken = sendevToken ?? token; // fallback to Director if SENDEV not in .env.live
-  const form = new FormData();
-  form.append("files", new Blob(["this is not a pdf"], { type: "application/pdf" }), "test.pdf");
-  const r = await fetch(`${BASE}/api/workspace/tasks/000000000000000000000001/submit`, {
-    method: "POST",
-    headers: authToken ? { authorization: `Bearer ${authToken}` } : {},
-    body: form,
-  });
-  const body = r.status < 500 ? await r.json().catch(() => ({})) : {};
-  // Must be EXACTLY 400 with the app's magic-bytes error message
-  const hasMsg = typeof body?.error === "string" && body.error.length > 0;
-  const pass = r.status === 400 && hasMsg;
-  row("fake .pdf upload (magic-bytes → app 400)", "400 + error msg", `${r.status}${hasMsg ? ` "${body.error?.slice(0, 40)}"` : ""}`, pass);
+  if (!sentesToken) {
+    row("fake .pdf upload (magic-bytes → app 400)", "400 + error msg", "SKIP: no SENTES creds", false);
+  } else {
+    const form = new FormData();
+    form.append("files", new Blob(["this is not a pdf"], { type: "application/pdf" }), "test.pdf");
+    const r = await fetch(`${BASE}/api/quality/bugs`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${sentesToken}` },
+      body: form,
+    });
+    const body = r.status < 500 ? await r.json().catch(() => ({})) : {};
+    const hasMsg = typeof body?.error === "string" && body.error.length > 0;
+    const pass = r.status === 400 && hasMsg;
+    row("fake .pdf upload (magic-bytes → app 400)", "400 + error msg", `${r.status}${hasMsg ? ` "${body.error?.slice(0, 40)}"` : ""}`, pass);
+  }
 }
 
 // Print table
