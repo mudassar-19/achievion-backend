@@ -84,12 +84,12 @@ export async function updateSettings(req, res) {
   if (workingTime          !== undefined) org.workingTime          = workingTime;
   if (extensionRules !== undefined) {
     const { extensionMaxDays: d, extensionMaxPct: p, extensionCumCapPct: c } = extensionRules ?? {};
-    if (d !== undefined && (!Number.isInteger(d) || d < 0 || d > 365))
-      return res.status(400).json({ error: "extensionMaxDays must be an integer 0–365." });
-    if (p !== undefined && (typeof p !== "number" || p < 0 || p > 100))
-      return res.status(400).json({ error: "extensionMaxPct must be 0–100." });
-    if (c !== undefined && (typeof c !== "number" || c < 0 || c > 100))
-      return res.status(400).json({ error: "extensionCumCapPct must be 0–100." });
+    if (d !== undefined && (!Number.isInteger(d) || d < 0 || d > 10))
+      return res.status(400).json({ error: "extensionMaxDays must be an integer 0–10." });
+    if (p !== undefined && (typeof p !== "number" || p < 0 || p > 50))
+      return res.status(400).json({ error: "extensionMaxPct must be 0–50." });
+    if (c !== undefined && (typeof c !== "number" || c < 0 || c > 50))
+      return res.status(400).json({ error: "extensionCumCapPct must be 0–50." });
     if (p !== undefined && c !== undefined && c < p)
       return res.status(400).json({ error: "extensionCumCapPct must be >= extensionMaxPct." });
     org.extensionRules = extensionRules;
@@ -108,7 +108,11 @@ export async function updateSettings(req, res) {
     }
   }
 
-  await org.save();
+  // ponytail: validateModifiedOnly — achievion_dev has one legacy customRole item
+  // {label:"CR Test Lead Dev"} missing required key+category fields; full validation
+  // would reject this unrelated field. A migration to patch that record would remove
+  // the need for this flag.
+  await org.save({ validateModifiedOnly: true });
   const after = orgSnapshot(org);
 
   await writeAuditEntry({

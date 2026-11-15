@@ -382,7 +382,7 @@ export async function getTeam(req, res) {
 // ── PATCH /api/director/team/:userId/role ─────────────────────────────────────
 export async function updateTeamMemberRole(req, res) {
   const { userId }         = req.params;
-  const { role: newRole }  = req.body;
+  const { role: newRole, reason } = req.body;
   const { orgId, id: directorId } = req.user;
 
   if (!newRole || !VALID_ROLES.includes(newRole))
@@ -409,7 +409,7 @@ export async function updateTeamMemberRole(req, res) {
   member.role   = newRole;
   await member.save();
 
-  // Log the change
+  // D-036: Director acts directly (no approval flow), audited with before/after + reason
   await AuditLog.create({
     action:       "role_change",
     orgId:        org._id,
@@ -417,6 +417,9 @@ export async function updateTeamMemberRole(req, res) {
     performedBy:  directorId,
     oldRole,
     newRole,
+    before:       { role: oldRole },
+    after:        { role: newRole },
+    reason:       reason?.trim() || "Director action",
   });
 
   res.json({ success: true, role: newRole });

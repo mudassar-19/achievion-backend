@@ -540,6 +540,11 @@ export async function deleteEmployee(req, res) {
   const org = await Organization.findOne({ orgId });
   if (!org) return clientError(res, 404, "Organization not found.");
 
+  // A4: reason required for DELETE, same rules as SUSPEND
+  const deleteReason = req.body?.reason;
+  const deleteReasonErr = validateSuspendReason(deleteReason);
+  if (deleteReasonErr) return clientError(res, 400, deleteReasonErr.replace("suspend", "delete").replace("Suspend", "Delete").replace("suspension", "deletion").replace("Suspension", "Deletion"));
+
   const existingDelete = await Approval.findOne({
     orgId:            org._id,
     actionType:       "DELETE_EMPLOYEE",
@@ -555,8 +560,7 @@ export async function deleteEmployee(req, res) {
     actionType:       "DELETE_EMPLOYEE",
     requestedBy:      new Types.ObjectId(req.org.orgDbId),
     targetEmployeeId: user._id,
-    // Store name + role snapshot so S-02 can show them after the user is soft-deleted
-    payload:          { employeeId: user._id, name: user.name, role: user.role, reason: req.body?.reason || "" },
+    payload:          { employeeId: user._id, name: user.name, role: user.role, reason: String(deleteReason).trim() },
   });
 
   return res.status(202).json({

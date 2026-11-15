@@ -112,8 +112,9 @@ export async function approveRequest(req, res) {
     }
   }
 
-  await approvalSvc.executeApproval(req.params.id, req.user._id ?? req.user.id);
-  res.json({ success: true, message: "Request approved and executed" });
+  const directorNote = req.body.note?.trim() || null;
+  await approvalSvc.executeApproval(req.params.id, req.user._id ?? req.user.id, directorNote);
+  res.json({ success: true, message: "Request approved and executed", directorNote });
 }
 
 // ── rejectRequest ─────────────────────────────────────────────────────────────
@@ -138,8 +139,8 @@ export async function rejectRequest(req, res) {
   }
 
   const rejectionReason = req.body.reason?.trim() || null;
-  if (!rejectionReason && ["SUSPEND_EMPLOYEE", "DELETE_EMPLOYEE"].includes(approval.actionType)) {
-    return res.status(400).json({ error: "A reason is required when rejecting SUSPEND or DELETE requests." });
+  if (!rejectionReason) {
+    return res.status(400).json({ error: "A reason is required when rejecting a request." });
   }
   await approvalSvc.rejectApproval(req.params.id, rejectionReason, req.user._id ?? req.user.id);
   res.json({ success: true, message: "Request rejected" });

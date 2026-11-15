@@ -91,7 +91,7 @@ export async function createApprovalRequest({
 // ── executeApproval ───────────────────────────────────────────────────────────
 // Carries out the action encoded in the approval record, marks it APPROVED,
 // and notifies the original requester.
-export async function executeApproval(approvalId, approverId = null) {
+export async function executeApproval(approvalId, approverId = null, directorNote = null) {
   const approval = await Approval.findById(approvalId);
   if (!approval) {
     const err = new Error("Approval not found.");
@@ -232,16 +232,19 @@ export async function executeApproval(approvalId, approverId = null) {
   if (auditEntry) {
     await AuditLog.create({
       ...auditEntry,
-      orgId:        orgId,
-      targetUserId: targetEmployeeId ?? (actionType === "CREATE_EMPLOYEE" ? result?._id : null),
-      performedBy:  approverId ?? orgId,
+      orgId:          orgId,
+      targetUserId:   targetEmployeeId ?? (actionType === "CREATE_EMPLOYEE" ? result?._id : null),
+      performedBy:    approverId ?? orgId,
+      requesterNote:  payload?.reason || undefined,
+      directorNote:   directorNote || undefined,
     }).catch(() => {}); // non-fatal — don't block the approval
   }
 
   // Mark approval as resolved
-  approval.status     = "APPROVED";
-  approval.resolvedAt = new Date();
-  if (approverId) approval.resolvedBy = approverId;
+  approval.status       = "APPROVED";
+  approval.resolvedAt   = new Date();
+  if (approverId)    approval.resolvedBy   = approverId;
+  if (directorNote)  approval.directorNote = directorNote;
   await approval.save();
 
   // Mark the Director's approval notification as read (matches both old and new type name)
@@ -255,12 +258,16 @@ export async function executeApproval(approvalId, approverId = null) {
     .populate("targetEmployeeId", "name")
     .lean();
 
+  const approvalMsg = directorNote
+    ? `Your request has been approved. Director note: ${directorNote}`
+    : "Your request has been approved";
+
   await Notification.create({
     userId:  approval.requestedBy,
     orgId:   String(orgId),
     type:    "approval_result",
-    message: "Your request has been approved",
-    meta:    { approvalId: approval._id, actionType },
+    message: approvalMsg,
+    meta:    { approvalId: approval._id, actionType, directorNote: directorNote ?? undefined },
   });
 
   const io = getIo();
@@ -311,6 +318,17 @@ export async function rejectApproval(approvalId, rejectionReason = null, approve
   approval.resolvedAt      = new Date();
   if (approverId) approval.resolvedBy = approverId;
   await approval.save();
+
+  await AuditLog.create({
+    action:        "approval_rejected",
+    orgId:         approval.orgId,
+    performedBy:   approverId ?? approval.orgId,
+    targetUserId:  approval.targetEmployeeId ?? undefined,
+    scope:         "account",
+    requesterNote: approval.payload?.reason || undefined,
+    directorNote:  rejectionReason || undefined,
+    detail:        `${approval.actionType} rejected${rejectionReason ? `: ${rejectionReason}` : ""}`,
+  }).catch(() => {});
 
   // Mark the Director's approval notification as read (matches both old and new type name)
   await Notification.updateMany(

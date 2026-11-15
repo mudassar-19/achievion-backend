@@ -74,7 +74,7 @@ export async function updateCustomRole(req, res) {
     if (!CATEGORIES.includes(category)) return res.status(400).json({ error: `category must be one of: ${CATEGORIES.join(", ")}.` });
     org.customRoles[idx].category = category;
   }
-  await org.save();
+  await org.save({ validateModifiedOnly: true });
   audit(org._id, req.user.id, "custom_role_updated", `Custom role "${org.customRoles[idx].label}" updated.`);
   res.json({ customRole: org.customRoles[idx] });
 }
@@ -90,7 +90,8 @@ export async function deactivateCustomRole(req, res) {
   if (!org.customRoles[idx].active) return res.status(409).json({ error: "Role already deactivated." });
 
   org.customRoles[idx].active = false;
-  await org.save();
+  // ponytail: validateModifiedOnly — same legacy-data issue as directorSettingsController
+  await org.save({ validateModifiedOnly: true });
   audit(org._id, req.user.id, "custom_role_deactivated", `Custom role "${org.customRoles[idx].label}" deactivated.`);
   res.json({ customRole: org.customRoles[idx] });
 }

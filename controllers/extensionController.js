@@ -73,7 +73,7 @@ export async function requestExtension(req, res) {
       action: "extension_requested",
       orgId:  new mongoose.Types.ObjectId(String(org._id)),
       performedBy: new mongoose.Types.ObjectId(userId),
-      detail: `Extension auto-applied: +${requestedDays}d on task "${task.title}"`,
+      detail: `Extension auto-applied (+${requestedDays}d, within limits: days≤${maxDays}, pct≤${maxPct}%) on task "${task.title}"`,
       scope:  "extension",
     });
 
@@ -104,11 +104,12 @@ export async function requestExtension(req, res) {
     });
   }
 
+  const exceedReason = requestedDays > maxDays ? `exceeds extensionMaxDays (${maxDays})` : `exceeds extensionMaxPct (${maxPct}%)`;
   await AuditLog.create({
     action: "extension_requested",
     orgId:  new mongoose.Types.ObjectId(String(org._id)),
     performedBy: new mongoose.Types.ObjectId(userId),
-    detail: `Extension requested: +${requestedDays}d on task "${task.title}"`,
+    detail: `Extension queued for Director (+${requestedDays}d, ${exceedReason}) on task "${task.title}"`,
     scope:  "extension",
   });
 

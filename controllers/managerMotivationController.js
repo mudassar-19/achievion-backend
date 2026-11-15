@@ -244,21 +244,51 @@ export async function listAnomalies(req, res) {
   ]);
   const items = rows[0]?.items ?? [];
   const logs = await XpLog.find({ taskId: { $in: items.map((t) => t._id) }, source: "task_approved" }, "taskId userId amount").lean();
-  const users = await User.find({ _id: { $in: [...new Set([...items.flatMap((t) => [t.flag.userId, t.flag.reviewedBy, ...(t.assignees ?? []), t.assignee]), ...logs.map((l) => l.userId)].filter(Boolean).map(String))] } }, "name").lean();
+
+  // A7: also include Director XP-adjustment anomalies from AuditLog (always status:"open")
+  // Include for "open" (status==="open") and "all" (status={$exists:true}) but NOT "reviewed".
+  // This keeps open+reviewed===all consistent (adjustItems contribute to open and all, not reviewed).
+  const isReviewed = typeof status === "object" && status.$in;
+  const includeAdjust = !isReviewed && (!kinds.length || kinds.includes("director_xp_adjust"));
+  const adjustLogs = includeAdjust ? await AuditLog.find(
+    { orgId: scope.org._id, action: "xp_adjust_flagged", scope: "anomaly" },
+    "targetUserId performedBy detail after createdAt"
+  ).sort({ createdAt: -1 }).limit(50).lean() : [];
+
+  const allUserIds = [
+    ...items.flatMap((t) => [t.flag.userId, t.flag.reviewedBy, ...(t.assignees ?? []), t.assignee]),
+    ...logs.map((l) => l.userId),
+    ...adjustLogs.flatMap((a) => [a.targetUserId, a.performedBy]),
+  ].filter(Boolean).map(String);
+  const users = await User.find({ _id: { $in: [...new Set(allUserIds)] } }, "name").lean();
   const nameOf = Object.fromEntries(users.map((u) => [String(u._id), u.name]));
+
+  const taskItems = items.map((t) => {
+    const mine = logs.filter((l) => String(l.taskId) === String(t._id) && (!t.flag.userId || String(l.userId) === String(t.flag.userId)));
+    const people = t.flag.userId ? [t.flag.userId] : mine.length ? mine.map((l) => l.userId) : [...(t.assignees ?? []), ...(t.assignee ? [t.assignee] : [])];
+    return {
+      id: t.flag._id, taskId: t._id, task: t.title, kind: t.flag.kind, reason: FLAG_LABEL[t.flag.kind], status: t.flag.status, date: t.flag.createdAt,
+      people: [...new Set(people.map(String))].map((id) => ({ id, name: nameOf[id] ?? "Former member" })),
+      xp: t.flag.xp ?? (mine.length ? mine.reduce((s, l) => s + l.amount, 0) : null),
+      decidedBy: t.flag.status !== "open" && t.flag.reviewedBy ? nameOf[String(t.flag.reviewedBy)] ?? "Former member" : null, decidedAt: t.flag.status !== "open" ? t.flag.reviewedAt ?? null : null,
+    };
+  });
+
+  const adjustItems = adjustLogs.map((a) => ({
+    id: String(a._id), taskId: null, task: null,
+    kind: "director_xp_adjust", reason: FLAG_LABEL.director_xp_adjust,
+    status: "open", date: a.createdAt,
+    people: a.targetUserId ? [{ id: String(a.targetUserId), name: nameOf[String(a.targetUserId)] ?? "Former member" }] : [],
+    xp: a.after?.amount ?? null,
+    decidedBy: null, decidedAt: null,
+    detail: a.detail,
+    evidence: a.after ?? null,
+  }));
+
   res.json({
-    page, pageSize: PAGE_SIZE, total: rows[0]?.total?.[0]?.n ?? 0,
-    items: items.map((t) => {
-      const mine = logs.filter((l) => String(l.taskId) === String(t._id) && (!t.flag.userId || String(l.userId) === String(t.flag.userId)));
-      const people = t.flag.userId ? [t.flag.userId] : mine.length ? mine.map((l) => l.userId) : [...(t.assignees ?? []), ...(t.assignee ? [t.assignee] : [])];
-      return {
-        id: t.flag._id, taskId: t._id, task: t.title, kind: t.flag.kind, reason: FLAG_LABEL[t.flag.kind], status: t.flag.status, date: t.flag.createdAt,
-        people: [...new Set(people.map(String))].map((id) => ({ id, name: nameOf[id] ?? "Former member" })),
-        xp: t.flag.xp ?? (mine.length ? mine.reduce((s, l) => s + l.amount, 0) : null),
-        // Batch 5 (D9): who decided and when (null while the flag is open)
-        decidedBy: t.flag.status !== "open" && t.flag.reviewedBy ? nameOf[String(t.flag.reviewedBy)] ?? "Former member" : null, decidedAt: t.flag.status !== "open" ? t.flag.reviewedAt ?? null : null,
-      };
-    }),
+    page, pageSize: PAGE_SIZE,
+    total: (rows[0]?.total?.[0]?.n ?? 0) + adjustItems.length,
+    items: [...taskItems, ...adjustItems],
   });
 }
 

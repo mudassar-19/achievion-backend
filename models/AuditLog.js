@@ -42,7 +42,9 @@ const auditLogSchema = new Schema(
         "portfolio_view_saved", "portfolio_view_updated", "portfolio_view_deleted",
         "member_suspend_initiated", "member_suspend_confirmed", "member_suspend_flagged",
         // ── V2 Phase 1: XP ledger (X7) ──────────────────────────────────────
-        "xp_awarded", "xp_adjusted",
+        "xp_awarded", "xp_adjusted", "xp_adjust_flagged",
+        // ── Approvals ────────────────────────────────────────────────────────
+        "approval_rejected",
         // ── V2 Phase 2: communities / groups admin actions (D-074) ─────────
         "community_created", "community_updated", "community_archived", "community_restored",
         "community_member_added", "community_member_removed",

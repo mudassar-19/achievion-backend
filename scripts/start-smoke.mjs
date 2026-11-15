@@ -17,8 +17,9 @@ if (env.MONGO_URI) {
 env.PORT = process.env.LAUNCH_PORT || "5057";
 env.CLIENT_URL = process.env.LAUNCH_CLIENT_URL || "http://localhost:5176";
 env.TRUST_PROXY = "1"; // allow X-Forwarded-For from tests so each test run gets its own rate-limit bucket
-// Optional: clear Cloudinary
-if (process.env.NO_CLOUDINARY) {
+// Always disable Cloudinary in smoke: deployAttachmentsApi tests disk-based upload path.
+// Set KEEP_CLOUDINARY=1 to preserve Cloudinary credentials for manual upload testing.
+if (!process.env.KEEP_CLOUDINARY) {
   env.CLOUDINARY_CLOUD_NAME = "";
   env.CLOUDINARY_API_KEY = "";
   env.CLOUDINARY_API_SECRET = "";

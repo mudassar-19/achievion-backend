@@ -43,12 +43,13 @@ export function findBursts(approvals) {
 export const isAiTlDisagreement = isDisagreement;
 
 // ── M-5: Anomalies screen ────────────────────────────────────────────────────
-export const FLAG_KINDS = ["ai_tl_disagreement", "xp_outlier", "rubber_stamp", "burst"];
+export const FLAG_KINDS = ["ai_tl_disagreement", "xp_outlier", "rubber_stamp", "burst", "director_xp_adjust"];
 export const FLAG_LABEL = {
   ai_tl_disagreement: "AI and Team Lead scores differ",
   xp_outlier:         "XP far from this person's usual",
   rubber_stamp:       "Approved very quickly with 5 stars",
   burst:              "Many approvals in one hour",
+  director_xp_adjust: "Director XP adjustment flagged for review",
 };
 
 // Plain, neutral sentence for the drawer ("needs review", never blame).
