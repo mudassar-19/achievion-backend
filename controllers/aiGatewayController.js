@@ -5,6 +5,8 @@ import Organization     from "../models/Organization.js";
 import Notification     from "../models/Notification.js";
 import User             from "../models/User.js";
 import { dailyCapUsd } from "../services/aiCap.js";
+import { periodFor, recapCards, aiRecapSummary } from "../services/recapService.js";
+import { periodRange } from "../services/recapMetrics.js";
 
 const IS_OID = /^[0-9a-f]{24}$/i;
 
@@ -98,35 +100,20 @@ export async function weeklySummary(req, res) {
   if (!requireDirector(req, res)) return;
   const { orgId, id: userId } = req.user;
 
-  const org = await Organization.findOne(orgFilter(orgId), "aiSettings _id").lean();
-  if (!org?.aiSettings?.weeklySummaryEnabled) {
-    return res.status(400).json({ error: "Weekly summary is disabled in AI settings." });
+  // Item 26 (D-538): the weekly summary is always on (item 42), so there is no "disabled in settings" refusal any more, and the AI is
+  // given this week's real numbers (before, it was given only the organisation id and had nothing to say).
+  const org = await Organization.findOne(orgFilter(orgId), "_id").lean();
+  if (!org) return res.status(404).json({ error: "Organization not found." });
+  const period = periodFor("weekly");
+  const cards = await recapCards(org, period);
+  const r = await aiRecapSummary({ orgId, userId, periodLabel: `Weekly recap, ${periodRange(period.start, period.end)}`, cards });
+  if (!r.text) {
+    const E = { not_configured: [503, "AI is not configured."], cap: [429, "The daily AI limit is reached. Try again tomorrow."], busy: [502, "The AI is busy right now. Try again in a moment."] }[r.error];
+    return res.status(E[0]).json({ error: E[1], code: r.error });
   }
-
-  try {
-    const prompt = getPrompt("weekly-summary");
-    const result = await callChain({
-      feature: "weekly_summary", orgId, requestedBy: userId,
-      promptId: prompt.id, promptVersion: prompt.version,
-      systemPrompt: prompt.system,
-      userMessage:  prompt.userTemplate({ orgId }),
-      validate: prompt.validate,
-    });
-
-    // Store as fyi Notification for the Director
-    await Notification.create({
-      userId:  userId,
-      orgId,
-      type:    "system",
-      tier:    "fyi",
-      title:   "Weekly AI Summary",
-      message: `[AI-generated] ${result.text}`,
-    });
-
-    res.json({ summary: result.text, aiGenerated: true });
-  } catch (err) {
-    res.status(err.status ?? 500).json({ error: err.message });
-  }
+  // Store as fyi Notification for the Director
+  await Notification.create({ userId, orgId, type: "system", tier: "fyi", title: "Weekly AI Summary", message: `[AI-generated] ${r.text}` });
+  res.json({ summary: r.text, period: periodRange(period.start, period.end), aiGenerated: true });
 }
 
 // ── GET /api/director/ai/status ──────────────────────────────────────────────

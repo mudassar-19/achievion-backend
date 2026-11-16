@@ -5,7 +5,7 @@ import Organization  from "../models/Organization.js";
 import Task          from "../models/Task.js";
 import AuditLog      from "../models/AuditLog.js";
 import { getIo }     from "../utils/io.js";
-import { approvalNotice, resultNotice, pendingDuplicateQuery } from "./approvalNotice.js";
+import { approvalNotice, resultNotice, pendingDuplicateQuery, conflictWith } from "./approvalNotice.js";
 
 // ── Human-readable label per action type ─────────────────────────────────────
 function actionLabel(actionType, payload, target) {
@@ -36,6 +36,17 @@ export async function createApprovalRequest({
     const err = new Error(targetEmployeeId ? `A PENDING ${actionType} approval for this employee already exists.` : "A request for this e-mail address is already waiting for the Director.");
     err.status = 409;
     throw err;
+  }
+
+  // Item 11 (D-540): a Delete next to a Suspend (and the other contradicting pairs) for one person is refused, not left for the Director to untangle.
+  if (targetEmployeeId) {
+    const open = await Approval.find({ orgId, targetEmployeeId, status: "PENDING" }, "actionType").lean();
+    const clash = conflictWith(actionType, open.map((a) => a.actionType));
+    if (clash) {
+      const err = new Error(`A ${clash.replace(/_EMPLOYEE$/, "").replace("_", " ").toLowerCase()} request for this employee is already waiting for the Director. Wait for the decision first.`);
+      err.status = 409;
+      throw err;
+    }
   }
 
   // SUSPEND_EMPLOYEE: 72h; all other modifying types: 7 days; informational (TASK_ASSIGNMENT): no expiry

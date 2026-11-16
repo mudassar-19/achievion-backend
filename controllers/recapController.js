@@ -1,8 +1,8 @@
 import Recap        from "../models/Recap.js";
-import Task         from "../models/Task.js";
-import Project      from "../models/Project.js";
 import Organization from "../models/Organization.js";
 import mongoose     from "mongoose";
+import { periodFor, recapCards, aiRecapSummary } from "../services/recapService.js";
+import { periodRange } from "../services/recapMetrics.js";
 
 const IS_OID   = /^[0-9a-f]{24}$/i;
 const orgFilter = (orgId) => IS_OID.test(orgId) ? { _id: orgId } : { orgId };
@@ -47,61 +47,36 @@ export async function markSeen(req, res) {
   res.json({ ok: true });
 }
 
-// ── POST /api/director/recaps/generate  — generate a recap on demand ─────────
-// Computes real aggregates (D-016: no hollow data)
+const LABEL = { weekly: "Weekly recap", monthly: "Monthly recap", yearly: "Yearly recap" };
+
+// ── POST /api/director/recaps/generate { type, summary? } — generate a recap now ─
+// Item 26 (D-538): real numbers (tasks delivered, on-time %, XP, active members, progress change, extensions, pending approvals)
+// each with a trend against the period before, and an optional short AI summary of those numbers (advisory, no names in it).
+// A failing AI never fails the recap: it is saved without a summary and `aiNote` says why.
 export async function generateRecap(req, res) {
   const { orgId, id: userId } = req.user;
-  const { type = "weekly" } = req.body ?? {};
+  const type = ["weekly", "monthly", "yearly"].includes(req.body?.type) ? req.body.type : "weekly";
 
   const org = await Organization.findOne(orgFilter(orgId), "_id orgId").lean();
   if (!org) return res.status(404).json({ error: "Org not found." });
 
-  const now       = new Date();
-  let periodStart, periodEnd, periodLabel;
+  const period = periodFor(type);
+  const range = periodRange(period.start, period.end);
+  const periodLabel = type === "weekly"
+    ? `Week of ${new Date(period.start).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" })}`
+    : type === "monthly" ? period.start.toLocaleDateString("en-US", { month: "long", year: "numeric", timeZone: "UTC" }) : `${period.start.getUTCFullYear()}`;
+  const cards = await recapCards(org, period);
 
-  if (type === "weekly") {
-    const day    = now.getDay();
-    const diff   = (day === 0 ? -6 : 1) - day;
-    periodStart  = new Date(now); periodStart.setDate(now.getDate() + diff); periodStart.setHours(0,0,0,0);
-    periodEnd    = new Date(periodStart); periodEnd.setDate(periodStart.getDate() + 6); periodEnd.setHours(23,59,59,999);
-    const wn     = Math.ceil(((periodStart - new Date(periodStart.getFullYear(), 0, 1)) / 86400000 + 1) / 7);
-    periodLabel  = `Week ${wn} (${periodStart.toLocaleDateString("en-GB",{day:"2-digit",month:"short"})}–${periodEnd.toLocaleDateString("en-GB",{day:"2-digit",month:"short",year:"numeric"})})`;
-  } else if (type === "monthly") {
-    periodStart  = new Date(Date.UTC(now.getFullYear(), now.getMonth(), 1));
-    periodEnd    = new Date(Date.UTC(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999));
-    periodLabel  = periodStart.toLocaleDateString("en-US", { month: "long", year: "numeric" });
-  } else {
-    periodStart  = new Date(Date.UTC(now.getFullYear(), 0,  1));
-    periodEnd    = new Date(Date.UTC(now.getFullYear(), 11, 31, 23, 59, 59, 999));
-    periodLabel  = `${now.getFullYear()} Annual Recap`;
+  let aiSummary = null, aiNote = null;
+  if (req.body?.summary !== false) {
+    const r = await aiRecapSummary({ orgId, userId, periodLabel: `${LABEL[type]}, ${range}`, cards });
+    if (r.text) aiSummary = r.text;
+    else aiNote = r.error === "not_configured" ? "AI is not configured, so there is no AI summary." : r.error === "cap" ? "The daily AI limit is reached, so there is no AI summary." : "The AI is busy right now, so there is no AI summary. Press Generate again to retry.";
   }
 
-  // Build cards from real aggregates
-  const dateFilter = { createdAt: { $gte: periodStart, $lte: periodEnd } };
-  const [projectsCompleted, tasksCompleted, tasksOverdue, avgQuality] = await Promise.all([
-    Project.countDocuments({ orgId: org._id.toString(), status: "Completed", updatedAt: { $gte: periodStart, $lte: periodEnd } }),
-    Task.countDocuments({ orgId: org._id.toString(), status: "Done", completedAt: { $gte: periodStart, $lte: periodEnd } }),
-    Task.countDocuments({ orgId: org._id.toString(), status: { $nin: ["Done"] }, deadline: { $lt: now } }),
-    Task.aggregate([
-      { $match: { orgId: org._id.toString(), qualityScore: { $ne: null }, completedAt: { $gte: periodStart, $lte: periodEnd } } },
-      { $group: { _id: null, avg: { $avg: "$qualityScore" } } },
-    ]),
-  ]);
-
-  const qualityAvg = avgQuality[0]?.avg ?? null;
-
-  const cards = [
-    { title: "Projects Completed", body: `${projectsCompleted} project${projectsCompleted !== 1 ? "s" : ""} completed this period.`, metric: { value: projectsCompleted, unit: "projects" } },
-    { title: "Tasks Delivered",    body: `${tasksCompleted} task${tasksCompleted !== 1 ? "s" : ""} completed.`,                     metric: { value: tasksCompleted,   unit: "tasks" } },
-    { title: "Overdue Tasks",      body: `${tasksOverdue} task${tasksOverdue !== 1 ? "s" : ""} currently overdue.`,                 metric: { value: tasksOverdue,     unit: "tasks" } },
-    ...(qualityAvg !== null ? [{ title: "Average Quality Score", body: `Mean quality score: ${qualityAvg.toFixed(2)}/5.`, metric: { value: qualityAvg, unit: "score" } }] : []),
-  ];
-
   const recap = await Recap.create({
-    orgId, type, periodLabel, periodStart, periodEnd,
-    cards,
+    orgId, type, periodLabel, periodRange: range, periodStart: period.start, periodEnd: period.end, cards, aiSummary,
     seenBy: [{ userId: new mongoose.Types.ObjectId(userId), seenAt: new Date() }],
   });
-
-  res.status(201).json({ recap });
+  res.status(201).json({ recap, aiNote });
 }

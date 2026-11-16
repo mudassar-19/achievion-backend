@@ -2,6 +2,7 @@
 // Tests: server/tests/decisionHistory.test.mjs. Credentials in the payload never leave: only the named fields are copied.
 const ACTION = { CREATE_EMPLOYEE: "Create account", DELETE_EMPLOYEE: "Delete", SUSPEND_EMPLOYEE: "Suspend", REACTIVATE_EMPLOYEE: "Reactivate", ROLE_CHANGE: "Change role", TASK_ASSIGNMENT: "Assign task" };
 const DECIDED = ["APPROVED", "REJECTED", "EXPIRED"];
+const BY_A_PERSON = ["APPROVED", "REJECTED"]; // "Decided" tab; a request that ran out of time has its own "Expired" tab (item 11)
 
 export function decisionRow(a) {
   const t = a.targetEmployeeId, p = a.payload ?? {};
@@ -17,6 +18,7 @@ export function decisionRow(a) {
 // scope: "decided" (default), "rejected", "suspended" → Mongo filter on top of the org.
 export function decisionFilter(scope) {
   if (scope === "rejected") return { status: "REJECTED" };
+  if (scope === "expired") return { status: "EXPIRED" };
   if (scope === "suspended") return { actionType: "SUSPEND_EMPLOYEE", status: { $in: DECIDED } };
-  return { status: { $in: DECIDED } };
+  return { status: { $in: BY_A_PERSON } };
 }

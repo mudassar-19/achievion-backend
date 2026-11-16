@@ -7,6 +7,7 @@ import Project from "../models/Project.js";
 import Task from "../models/Task.js";
 import { orgScope } from "./managerProjectsController.js";
 import { isRankable, rankRows, rankChange, scopesFor, MIN_PEOPLE, publicRow } from "../services/leaderboardRules.js";
+import { periodSince, groupXpBySource } from "../services/leaderboardXp.js";
 
 // ── Static badge catalog ──────────────────────────────────────────────────────
 // `progressType` drives the server-side progress engine (see computeBadgeProgress).
@@ -252,30 +253,35 @@ export async function getLeaderboard(req, res) {
   const profiles = new Map((await GamificationProfile.find({ userId: { $in: userIds } }, "userId level totalXp monthlyXp streaks stats avatarStyle avatarSeed shopEquipped previousDaily longestDaily").lean()).map((p) => [String(p.userId), p]));
 
   const weekAgo = new Date(Date.now() - 7 * 86_400_000);
-  const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
-  const since = period === "week" ? weekAgo : period === "month" ? monthStart : null;
-  const [weekXp, doneAgg] = await Promise.all([
+  const since = periodSince(period); // item 36: XP, its sources and Tasks done all use this one cut-off
+  const [weekXp, doneAgg, srcAgg] = await Promise.all([
     XpLog.aggregate([{ $match: { userId: { $in: userIds }, createdAt: { $gte: weekAgo }, amount: { $gt: 0 } } }, { $group: { _id: "$userId", xp: { $sum: "$amount" } } }]),
     Task.aggregate([
-      { $match: { assignees: { $in: userIds }, status: "Done", ...(since ? { completedAt: { $gte: since } } : {}) } },
-      { $unwind: "$assignees" }, { $match: { assignees: { $in: userIds } } },
+      // Item 36: a task counts for everyone on it, whether they are in `assignees` or only in the single `assignee` field (older tasks)
+      { $match: { status: "Done", $or: [{ assignees: { $in: userIds } }, { assignee: { $in: userIds } }], ...(since ? { completedAt: { $gte: since } } : {}) } },
+      { $addFields: { people: { $setUnion: [{ $ifNull: ["$assignees", []] }, { $cond: [{ $ifNull: ["$assignee", false] }, ["$assignee"], []] }] } } },
+      { $unwind: "$people" }, { $match: { people: { $in: userIds } } }, { $addFields: { assignees: "$people" } },
       { $group: { _id: "$assignees", done: { $sum: 1 }, judged: { $sum: { $cond: [{ $ifNull: ["$deadline", false] }, 1, 0] } },
         onTime: { $sum: { $cond: [{ $and: [{ $ifNull: ["$deadline", false] }, { $lte: ["$completedAt", "$deadline"] }] }, 1, 0] } } } },
     ]),
+    XpLog.aggregate([{ $match: { userId: { $in: userIds }, ...(since ? { createdAt: { $gte: since } } : {}) } }, { $group: { _id: { u: "$userId", s: "$source" }, xp: { $sum: "$amount" } } }]),
   ]);
+  const srcRows = new Map(); // userId → [{ source, xp }] for the period
+  for (const r of srcAgg) { const k = String(r._id.u); (srcRows.get(k) ?? srcRows.set(k, []).get(k)).push({ source: r._id.s, xp: r.xp }); }
+  const periodXp = (uid) => (srcRows.get(uid) ?? []).reduce((a, r) => a + r.xp, 0);
   const wk = new Map(weekXp.map((r) => [String(r._id), r.xp]));
   const done = new Map(doneAgg.map((r) => [String(r._id), r]));
 
   const rows = users.map((u) => {
     const uid = String(u._id), p = profiles.get(uid) ?? {};
     const totalXp = p.totalXp ?? 0, weeklyXp = wk.get(uid) ?? 0, monthlyXp = p.monthlyXp ?? 0;
-    const xp = period === "week" ? weeklyXp : period === "month" ? monthlyXp : totalXp;
+    const xp = period === "all" ? totalXp : periodXp(uid); // week / month: from the XP ledger with the same cut-off as Tasks done (item 36)
     const d = done.get(uid);
     const tasksCompleted = d?.done ?? 0;
     const onTimePct = d?.judged ? Math.round((d.onTime / d.judged) * 100) : null;
     // Batch 3 (E4): public fields only, with the avatar the person equipped (else the default).
     return publicRow({ userId: uid, name: u.name ?? "—", role: u.role ?? "", roleLabel: u.roleLabel ?? null, avatarStyle: p.avatarStyle, avatarSeed: p.avatarSeed ?? null, level: p.level ?? 1,
-      xp, rankXp: xp, totalXp, monthlyXp, weeklyXp, tasksCompleted, onTimePct, completionRate: onTimePct ?? 0,
+      xp, rankXp: xp, xpBySource: groupXpBySource(srcRows.get(uid) ?? []), totalXp, monthlyXp, weeklyXp, tasksCompleted, onTimePct, completionRate: onTimePct ?? 0,
       streak: p.streaks?.daily ?? 0, longestStreak: p.longestDaily ?? 0, previousStreak: p.previousDaily ?? 0, isUser: uid === String(userId),
       shopEquipped: p.shopEquipped instanceof Map ? Object.fromEntries(p.shopEquipped) : (p.shopEquipped ?? {}) });
   }).sort((a, b) => a.name.localeCompare(b.name));

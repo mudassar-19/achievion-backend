@@ -9,6 +9,7 @@ import Task              from "../models/Task.js";
 import * as approvalSvc  from "../services/approvalService.js";
 import { sanitizeApproval } from "./approvalController.js";
 import { validateSuspendReason } from "../services/orgAdminRules.js";
+import { defaultDepartmentFor, needsDefaults, DEFAULT_DEPARTMENTS } from "../services/departmentDefault.js";
 
 // ── Role promotion helper ─────────────────────────────────────────────────────
 const ROLE_RANK = {
@@ -122,9 +123,8 @@ export async function listCustomRolesForOrg(req, res) {
 export async function createEmployee(req, res) {
   const { orgId, orgDbId } = req.org;
   const { name, email, role = "Developer", roleLabel } = req.body ?? {};
-  // Auto-assign department from role if not provided
-  const ROLE_DEPT = { Developer: "Development", Designer: "Design", Tester: "QA", "Team Lead": "Development" };
-  const department = req.body.department?.trim() || ROLE_DEPT[role] || null;
+  // Item 7 (D-541): the department comes from the role category (below, once the organisation is loaded) unless one was given.
+  let department = req.body.department?.trim() || null;
 
   // Validation
   if (!name?.trim() || !email?.trim()) {
@@ -140,6 +140,13 @@ export async function createEmployee(req, res) {
   // Verify org exists
   const org = await Organization.findOne({ orgId });
   if (!org) return clientError(res, 404, "Organization not found.");
+
+  // A new organisation has no departments yet: start with Development, Design and QA (the Director can rename or archive them).
+  if (needsDefaults(org)) {
+    org.departments = [...DEFAULT_DEPARTMENTS];
+    await Organization.updateOne({ _id: org._id }, { $set: { departments: org.departments } });
+  }
+  department ||= defaultDepartmentFor(role, org);
 
   // If a custom label is provided, it must match an active custom role in this org
   if (roleLabel != null) {

@@ -39,6 +39,16 @@ export function resultNotice({ actionType, payload = {}, target, status, directo
   };
 }
 
+// Item 11 (D-540): requests about one person that contradict each other. Returns the pending action type that conflicts, or null.
+// Delete / Suspend / Reactivate / Role change cannot all be waiting at once (a Delete next to anything; Suspend with Reactivate).
+const CONTRADICT = {
+  DELETE_EMPLOYEE: ["SUSPEND_EMPLOYEE", "REACTIVATE_EMPLOYEE", "ROLE_CHANGE"],
+  SUSPEND_EMPLOYEE: ["DELETE_EMPLOYEE", "REACTIVATE_EMPLOYEE"],
+  REACTIVATE_EMPLOYEE: ["DELETE_EMPLOYEE", "SUSPEND_EMPLOYEE"],
+  ROLE_CHANGE: ["DELETE_EMPLOYEE"],
+};
+export const conflictWith = (actionType, pendingTypes) => (CONTRADICT[actionType] ?? []).find((t) => pendingTypes.includes(t)) ?? null;
+
 // The open request that makes a new one a duplicate: same action on the same person, or the same e-mail for a new account.
 export function pendingDuplicateQuery({ orgId, actionType, targetEmployeeId, payload = {} }) {
   if (targetEmployeeId) return { orgId, actionType, targetEmployeeId, status: "PENDING" };
