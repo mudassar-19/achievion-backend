@@ -5,6 +5,7 @@ import mongoose     from "mongoose";
 import jwt          from "jsonwebtoken";
 import crypto       from "node:crypto";
 import { ROLE_CATEGORY_MAP } from "../models/User.js";
+import { listView } from "../services/sessionRules.js";
 
 function signToken(user) {
   return jwt.sign(
@@ -32,16 +33,8 @@ export async function listSessions(req, res) {
     .sort({ lastSeenAt: -1 })
     .lean();
 
-  res.json({
-    sessions: sessions.map((s) => ({
-      id:        s._id,
-      device:    s.device,
-      ip:        s.ip,
-      lastSeenAt: s.lastSeenAt,
-      createdAt: s.createdAt,
-      isCurrent: s.tokenHash === current,
-    })),
-  });
+  // Item 33: device names, one entry per device, current first; no raw user-agent, no IP address.
+  res.json({ sessions: listView(sessions, current) });
 }
 
 // ── POST /api/auth/sessions/sign-out-others  — revoke all other sessions ──────

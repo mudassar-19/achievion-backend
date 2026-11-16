@@ -20,6 +20,7 @@ import { LIMIT_TYPE } from "../services/reviewRules.js";
 import { getAlerts, getActivity } from "./teamLeadController.js";
 import { createNotification } from "./notificationController.js";
 import { healthForProjects } from "../services/projectHealthService.js";
+import { moduleProgressByIds, pct } from "../services/moduleProgress.js";
 import { capture, passOn } from "../utils/capture.js";
 import { teamOf, parseTaskQuery, moduleState, TASK_PAGE, QUESTION_MAX } from "../services/teamLeadRules.js";
 import { canDeleteTask, isBlocked } from "../services/taskFormRules.js";
@@ -94,10 +95,12 @@ async function moduleRows(req, s) {
     healthForProjects(s.projects.filter((p) => !CLOSED.includes(p.status))),
   ]);
   const withModule = new Set(mods.map((m) => String(m.projectId)));
+  const prog = await moduleProgressByIds(mods.map((m) => m._id)); // LB-1: same numbers as the Director module page
   const rows = mods.map((m) => {
     const p = projectIn(s, m.projectId);
+    const progress = prog.get(String(m._id)).pct;
     return { key: `m-${m._id}`, kind: "module", id: m._id, projectId: m.projectId, title: m.title, project: p?.title ?? "—", deadline: m.dueDate ?? p?.deadline ?? null,
-      progress: m.progress ?? 0, acceptedAt: m.tlAcceptedAt ?? null, manager: p?.managerId?.name ?? null, state: moduleState({ kind: "module", acceptedAt: m.tlAcceptedAt, status: m.status, progress: m.progress }) };
+      progress, acceptedAt: m.tlAcceptedAt ?? null, manager: p?.managerId?.name ?? null, state: moduleState({ kind: "module", acceptedAt: m.tlAcceptedAt, status: m.status, progress }) };
   });
   for (const p of s.projects) {
     if (withModule.has(String(p._id)) || CLOSED.includes(p.status)) continue;
@@ -123,7 +126,7 @@ export async function getModule(req, res) {
     if (!mod) return res.status(404).json({ error: "Module not found in your projects." });
   }
   const [tasks, health, wl] = await Promise.all([
-    Task.find({ ...s.scope.filter, projectId: p._id, ...(mod && (await Task.exists({ milestoneId: mod._id })) ? { milestoneId: mod._id } : {}) }, "title status priority deadline startDate createdAt estimatedHours assignee assignees isLate dependsOn")
+    Task.find({ ...s.scope.filter, projectId: p._id, ...(mod && (await Task.exists({ milestoneId: mod._id })) ? { milestoneId: mod._id } : {}) }, "title type status priority deadline startDate createdAt estimatedHours assignee assignees isLate dependsOn")
       .populate("assignee", "name").populate("assignees", "name").sort({ deadline: 1 }).limit(100).lean(),
     healthForProjects([p]),
     workloadView(s.scope, req.user.id, { userIds: (p.members ?? []).filter((m) => !["Director", "Manager", "Team Lead"].includes(m.role)).map((m) => m._id), projectIds: [p._id] }),
@@ -136,8 +139,8 @@ export async function getModule(req, res) {
     brief: (mod?.description || p.description || "").trim(), deadline: mod?.dueDate ?? p.deadline ?? null,
     manager: p.managerId ? { id: p.managerId._id, name: p.managerId.name } : null,
     acceptedAt: mod?.tlAcceptedAt ?? null, qaReadyAt: mod?.qaReadyAt ?? null, startDate: mod?.startDate ?? p.startDate ?? null, state: moduleState({ kind: mod ? "module" : "project", acceptedAt: mod?.tlAcceptedAt, status: p.status, progress: mod?.progress }),
-    progress: { done, total: tasks.length, pct: tasks.length ? Math.round((done / tasks.length) * 100) : 0, byStatus: by, health: health.get(String(p._id)) ?? null },
-    tasks: tasks.map((t) => ({ id: t._id, title: t.title, status: t.status, priority: t.priority, deadline: t.deadline, isLate: !!t.isLate,
+    progress: { done, total: tasks.length, pct: pct(done, tasks.length), byStatus: by, health: health.get(String(p._id)) ?? null },
+    tasks: tasks.map((t) => ({ id: t._id, title: t.title, type: t.type ?? null, status: t.status, priority: t.priority, deadline: t.deadline, isLate: !!t.isLate,
       startDate: t.startDate ?? t.createdAt ?? null, estimatedHours: t.estimatedHours ?? null, hasDependencies: (t.dependsOn ?? []).length > 0,
       assignees: [...(t.assignees ?? []), ...(t.assignee ? [t.assignee] : [])].filter((x, i, a) => x && a.findIndex((y) => String(y._id) === String(x._id)) === i).map((x) => x.name) })),
     team: wl.members.map((m) => ({ id: m.id, name: m.name, role: m.role, activeTasks: m.activeTasks, label: m.label, tone: m.tone, status: m.status })),
@@ -201,10 +204,18 @@ export async function listTasks(req, res) {
   }
   const [total, items] = await Promise.all([
     Task.countDocuments(f),
-    Task.find(f, "title status priority type deadline isLate projectId assignee assignees createdBy tags dependsOn groupTag").populate("assignee", "name").populate("assignees", "name").populate("createdBy", "name")
+    Task.find(f, "title status priority type deadline isLate projectId assignee assignees createdBy tags dependsOn groupTag parentId").populate("assignee", "name").populate("assignees", "name").populate("createdBy", "name")
       .sort({ deadline: 1, createdAt: -1 }).skip((q.page - 1) * TASK_PAGE).limit(TASK_PAGE).lean(),
   ]);
   const titleOf = Object.fromEntries(s.projects.map((p) => [String(p._id), p.title]));
+  // Item 56: a subtask says whose it is, a parent says how many subtasks it has and how many are done.
+  const ids = items.map((t) => t._id);
+  const [kids, parents] = await Promise.all([
+    Task.aggregate([{ $match: { parentId: { $in: ids }, isDeleted: { $ne: true } } }, { $group: { _id: "$parentId", n: { $sum: 1 }, done: { $sum: { $cond: [{ $eq: ["$status", "Done"] }, 1, 0] } } } }]),
+    Task.find({ _id: { $in: items.map((t) => t.parentId).filter(Boolean) } }, "title").lean(),
+  ]);
+  const kidsOf = Object.fromEntries(kids.map((k) => [String(k._id), { count: k.n, done: k.done }]));
+  const parentTitle = Object.fromEntries(parents.map((p) => [String(p._id), p.title]));
   // T-5 (D-142): tasks waiting for the Manager at the resubmission limit.
   const waiting = new Set((await OperationalRequest.find({ taskId: { $in: items.map((t) => t._id) }, type: LIMIT_TYPE, status: { $in: ["Pending", "In Progress"] } }, "taskId").lean()).map((r) => String(r.taskId)));
   res.json({
@@ -212,6 +223,7 @@ export async function listTasks(req, res) {
     items: items.map((t) => ({ waitingManager: waiting.has(String(t._id)), id: t._id, title: t.title, status: t.status, priority: t.priority, type: t.type, deadline: t.deadline, isLate: !!t.isLate,
       project: { id: t.projectId, title: titleOf[String(t.projectId)] ?? "—" }, createdBy: t.createdBy?.name ?? null,
       tags: t.tags ?? [], hasDependencies: (t.dependsOn ?? []).length > 0, groupTag: t.groupTag ?? null,
+      parent: t.parentId ? { id: t.parentId, title: parentTitle[String(t.parentId)] ?? "another task" } : null, subtasks: kidsOf[String(t._id)] ?? null,
       assignees: [...(t.assignees ?? []), ...(t.assignee ? [t.assignee] : [])].filter((x, i, a) => x && a.findIndex((y) => String(y._id) === String(x._id)) === i).map((x) => ({ id: x._id, name: x.name })) })),
     options: {
       modules: s.projects.filter((p) => !CLOSED.includes(p.status)).map((p) => ({ id: p._id, title: p.title })).sort((a, b) => a.title.localeCompare(b.title)),

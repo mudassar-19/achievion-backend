@@ -14,6 +14,8 @@ import {
   parseSprintListQuery, canDeleteSprint, sprintNotifyList,
 } from "../services/sprintRules.js";
 
+import { startInPast } from "../services/startDateRules.js";
+
 const CLOSED_PROJECT = ["Archived", "Completed", "Deleted"];
 const LEADERS = ["Director", "Manager"];
 const TASK_FIELDS = "title type priority status xpValue estimatedHours deadline assignees assignee completedAt submittedAt firstSubmittedAt tlScore";
@@ -81,6 +83,8 @@ export async function createSprint(req, res) {
   if (Object.keys(errors).length) return res.status(400).json({ error: Object.values(errors)[0], fields: errors });
   const scope = await orgScope(req.user.orgId);
   if (!scope) return res.status(404).json({ error: "Organization not found." });
+  const past = startInPast(value.startDate, new Date(), scope.org.workingTime?.timezone); // item 50
+  if (past) return res.status(400).json({ error: past, fields: { startDate: past } });
   const project = await Project.findOne({ _id: value.projectId, ...scope.filter, isDeleted: { $ne: true } }, "title status").lean();
   if (!project) return res.status(400).json({ error: "Choose a project from your organization.", fields: { projectId: "Choose a project from your organization." } });
   if (CLOSED_PROJECT.includes(project.status)) return res.status(409).json({ error: `"${project.title}" is ${project.status.toLowerCase()}; restore it before planning sprints.` });
@@ -132,6 +136,8 @@ export async function updateSprint(req, res) {
   if (active) merged.startDate = sprint.startDate;
   const { errors, value } = validateSprintInput(merged, { mode: "edit" });
   if (Object.keys(errors).length) return res.status(400).json({ error: Object.values(errors)[0], fields: errors });
+  const past = startInPast(value.startDate, new Date(), loaded.scope.org.workingTime?.timezone, { unchangedFrom: sprint.startDate }); // item 50
+  if (past) return res.status(400).json({ error: past, fields: { startDate: past } });
   Object.assign(sprint, value);
   await sprint.save();
   if (loaded.project) audit(loaded.scope.org, req, loaded.project, "sprint_updated", `Sprint "${sprint.name}" edited.`); // T-5 (D-143)

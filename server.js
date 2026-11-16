@@ -50,6 +50,8 @@ import { chatAudit }         from "./services/chatService.js";
 import User                from "./models/User.js";
 import { setIo }                           from "./utils/io.js";
 import { startDeadlineJobs } from "./jobs/deadlineJobs.js";
+import { startOrgHealthJob } from "./jobs/orgHealthJob.js";
+import { jobsDisabled } from "./utils/jobsFlag.js";
 import { snapshotAllOrgs } from "./services/reportService.js";
 import { startWeeklySummaryScheduler }     from "./jobs/weeklySummaryScheduler.js";
 import { flagStaleSuspensions }            from "./controllers/emergencySuspendController.js";
@@ -362,12 +364,16 @@ async function start() {
   registerGamificationListeners(emitter);
   registerDesignHandoff(emitter); // E-3b: approved design → linked developer tasks (no XP)
 
+  // DISABLE_JOBS=1 (a local server on the shared live database): no cron, no scheduler, no start-up seed. Render leaves it unset.
+  const jobs = !jobsDisabled();
+  if (!jobs) console.log("[Server] DISABLE_JOBS is set: background jobs are OFF.");
+
   // RND-19: every hour at :05. Each org's days are judged once ITS local clock is past 00:05 (its own timezone and
   // working days); lastJudgedDate makes it idempotent and repairs a missed run.
-  cron.schedule("5 * * * *", () => judgeDailyStreaks().catch((e) => console.error("[streak-judge]", e.message)));
+  if (jobs) cron.schedule("5 * * * *", () => judgeDailyStreaks().catch((e) => console.error("[streak-judge]", e.message)));
 
   // Daily cron at 00:05 UTC: collab streak + HP regen + monthly XP reset
-  cron.schedule("5 0 * * *", async () => {
+  if (jobs) cron.schedule("5 0 * * *", async () => {
     try {
       await updateDailyStreaks();
 
@@ -381,16 +387,19 @@ async function start() {
   });
 
   // M-6: daily team well-being counts for the Reports trend (after the HP update above).
-  cron.schedule("20 0 * * *", () => snapshotAllOrgs().catch((e) => console.error("[wellbeing-snapshot]", e.message)));
+  if (jobs) cron.schedule("20 0 * * *", () => snapshotAllOrgs().catch((e) => console.error("[wellbeing-snapshot]", e.message)));
 
   // D-055: no auto-start cron. The assignee moves To-Do → In-Progress (taskController.updateTaskStatus).
 
-  startWeeklySummaryScheduler();
-  startDeadlineJobs();
-  seedCommunities(); // idempotent — wraps legacy channels into communities
+  if (jobs) {
+    startWeeklySummaryScheduler();
+    startDeadlineJobs();
+    startOrgHealthJob(); // weekly Org Health snapshot (item 18)
+    seedCommunities(); // idempotent — wraps legacy channels into communities
+  }
 
   // Flag stale emergency suspensions every hour
-  cron.schedule("0 * * * *", () => flagStaleSuspensions().catch((e) => console.error("[suspend-cron]", e.message)));
+  if (jobs) cron.schedule("0 * * * *", () => flagStaleSuspensions().catch((e) => console.error("[suspend-cron]", e.message)));
 
   httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`[Server] Listening on 0.0.0.0:${PORT}`);

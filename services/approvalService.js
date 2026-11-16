@@ -5,6 +5,7 @@ import Organization  from "../models/Organization.js";
 import Task          from "../models/Task.js";
 import AuditLog      from "../models/AuditLog.js";
 import { getIo }     from "../utils/io.js";
+import { approvalNotice, resultNotice, pendingDuplicateQuery } from "./approvalNotice.js";
 
 // ── Human-readable label per action type ─────────────────────────────────────
 function actionLabel(actionType, payload, target) {
@@ -29,14 +30,12 @@ export async function createApprovalRequest({
   targetEmployeeId = null,
   payload,
 }) {
-  // Block duplicate PENDING approval for same target + actionType
-  if (targetEmployeeId) {
-    const dup = await Approval.findOne({ orgId, actionType, targetEmployeeId, status: "PENDING" }).lean();
-    if (dup) {
-      const err = new Error(`A PENDING ${actionType} approval for this employee already exists.`);
-      err.status = 409;
-      throw err;
-    }
+  // Block a duplicate PENDING approval: same action on the same person, or the same e-mail for a new account (item 32).
+  const dupQuery = pendingDuplicateQuery({ orgId, actionType, targetEmployeeId, payload });
+  if (dupQuery && await Approval.exists(dupQuery)) {
+    const err = new Error(targetEmployeeId ? `A PENDING ${actionType} approval for this employee already exists.` : "A request for this e-mail address is already waiting for the Director.");
+    err.status = 409;
+    throw err;
   }
 
   // SUSPEND_EMPLOYEE: 72h; all other modifying types: 7 days; informational (TASK_ASSIGNMENT): no expiry
@@ -61,17 +60,21 @@ export async function createApprovalRequest({
   const director = await User.findOne({ orgId, role: "Director" }).lean();
 
   if (director) {
-    const suspendReason = actionType === "SUSPEND_EMPLOYEE" && payload?.reason
-      ? ` — "${payload.reason.slice(0, 80)}${payload.reason.length > 80 ? "…" : ""}"`
-      : "";
-    // Persist in-app notification for the Director
+    // Persist in-app notification for the Director: plain words, who and what, a link to this exact request (item 32)
+    const [target, requester] = await Promise.all([
+      targetEmployeeId ? User.findById(targetEmployeeId, "name role").lean() : null,
+      User.findById(requestedBy, "name").lean(), // null when the Org Admin (an Organization record) asked: the text says "The Org Admin"
+    ]);
+    const notice = approvalNotice({ actionType, payload, requester, target, approvalId: approval._id });
     await Notification.create({
       userId:  director._id,
       orgId:   String(orgId),
       type:    "approval_pending",
-      tier:    "needs_action",
-      message: `New ${actionType} request pending your approval${suspendReason}`,
-      meta:    { approvalId: approval._id },
+      tier:    notice.tier,
+      title:   notice.title,
+      message: notice.message,
+      deepLink: notice.deepLink,
+      meta:    { approvalId: approval._id, actionType },
     });
 
     // Real-time push via Socket.IO
@@ -255,18 +258,17 @@ export async function executeApproval(approvalId, approverId = null, directorNot
 
   // Notify the org admin via org room
   const resolvedApproval = await Approval.findById(approvalId)
-    .populate("targetEmployeeId", "name")
+    .populate("targetEmployeeId", "name role")
     .lean();
 
-  const approvalMsg = directorNote
-    ? `Your request has been approved. Director note: ${directorNote}`
-    : "Your request has been approved";
-
+  const done = resultNotice({ actionType, payload: approval.payload, target: resolvedApproval?.targetEmployeeId, status: "APPROVED", directorNote });
   await Notification.create({
     userId:  approval.requestedBy,
     orgId:   String(orgId),
     type:    "approval_result",
-    message: approvalMsg,
+    title:   done.title,
+    message: done.message,
+    deepLink: done.deepLink,
     meta:    { approvalId: approval._id, actionType, directorNote: directorNote ?? undefined },
   });
 
@@ -336,14 +338,15 @@ export async function rejectApproval(approvalId, rejectionReason = null, approve
     { $set: { read: true } }
   );
 
-  const reason  = rejectionReason ? `: ${rejectionReason}` : "";
-  const message = `Your request was rejected${reason}`;
-
+  const target = approval.targetEmployeeId ? await User.findById(approval.targetEmployeeId, "name role").lean() : null;
+  const no = resultNotice({ actionType: approval.actionType, payload: approval.payload, target, status: "REJECTED", reason: rejectionReason });
   await Notification.create({
     userId:  approval.requestedBy,
     orgId:   String(approval.orgId),
     type:    "approval_result",
-    message,
+    title:   no.title,
+    message: no.message,
+    deepLink: no.deepLink,
     meta:    { approvalId: approval._id, actionType: approval.actionType },
   });
 

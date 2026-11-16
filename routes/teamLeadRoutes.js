@@ -76,6 +76,8 @@ router.get("/team/members/:userId",          tw.getTeamMember);
 
 // ── T-2 (D-118, D-119, D-122..D-125): create / edit / group assign, detail tabs, files, bulk, saved filters, module requests ──
 router.post("/tasks/create",                 tt.createTasks);             // project checked inside (own projects only)
+router.post("/xp-estimate",                  tt.xpEstimate);              // item 52: read-only Estimated XP
+router.post("/plan-suggest",                 tt.planSuggest);            // item 53: dates and sprint from the estimate; a suggestion only
 router.post("/tasks/bulk",                   tt.bulkTasks);               // every id checked inside
 router.get("/tasks/:id/full",                tw.ownTask, tt.fullTask);
 router.patch("/tasks/:id/edit",              tw.ownTask, tt.editTask);

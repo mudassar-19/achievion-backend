@@ -48,6 +48,8 @@ const xpLogSchema = new Schema(
     flagId:         { type: Types.ObjectId, default: null },
     // D6: idempotency key for Director manual adjust — prevents double-submit
     adjustId:       { type: String, default: null },
+    // Item 8: the Director's reason for a manual adjustment (shown with the "Director adjustment" label in the XP history)
+    reason:         { type: String, default: null },
   },
   { timestamps: true }
 );

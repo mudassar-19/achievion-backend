@@ -196,7 +196,7 @@ Use only the numbers in <data>; never invent people, tasks or numbers. In JSON i
       `Find the ONE most important thing for this Team Lead today: an overloaded person, blocked tasks, a bottleneck or a close deadline. kind is overload | bottleneck | blocked | deadline | none ("none" when nothing stands out). title is at most 10 words, body 1-2 sentences with the numbers, why 1-3 short facts from the data. target is one reference (m#, t#, k# or s#) or null.`,
       `{"kind":"blocked","title":"...","body":"...","why":["..."],"target":"t1"}`),
     "tl-assign-hint": entry("tl-assign-hint", 200,
-      `Pick the ONE candidate (c#) from data.candidates who should take the task, using their load, status and role. "reason" is one sentence with the numbers.`,
+      `Pick the ONE candidate (c#) from data.candidates who should take the task, using their load, status and role. Each candidate has a roleCategory (developer, designer, tester or leader), fits (the role suits the task type) and, when the task is a subtask, fitsParentDomain (the role suits the parent's domain, data.task.parentDomain). Prefer candidates with fits true, and with fitsParentDomain true when it is present, before comparing load; if nobody fits, pick the best by load and say in the reason that nobody fits. You only suggest: the Team Lead decides. "reason" is one sentence with the numbers.`,
       `{"candidate":"c1","reason":"..."}`),
     "tl-sprint-scope": entry("tl-sprint-scope", 300,
       `Suggest a sprint scope that fits the team capacity in hours. "add" lists backlog references (t#) to add, "remove" lists sprint references to take out; urgent and high priority tasks stay. The planned hours after your change must not exceed capacity.hours. "why" is one sentence.`,

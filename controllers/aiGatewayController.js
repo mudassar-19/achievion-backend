@@ -4,6 +4,7 @@ import AIPromptLog      from "../models/AIPromptLog.js";
 import Organization     from "../models/Organization.js";
 import Notification     from "../models/Notification.js";
 import User             from "../models/User.js";
+import { dailyCapUsd } from "../services/aiCap.js";
 
 const IS_OID = /^[0-9a-f]{24}$/i;
 
@@ -137,7 +138,7 @@ export async function aiStatus(req, res) {
   const configured = !!(process.env.GROQ_API_KEY || process.env.OPENROUTER_API_KEY);
 
   const org = await Organization.findOne(orgFilter(orgId), "aiSettings").lean();
-  const cap = org?.aiSettings?.costCapUsdPerDay ?? 1.0;
+  const cap = dailyCapUsd(org, 1.0); // env AI_DAILY_COST_CAP_USD wins (item 42)
 
   const start = new Date(); start.setHours(0, 0, 0, 0);
   const agg = await AIPromptLog.aggregate([

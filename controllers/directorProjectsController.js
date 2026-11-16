@@ -13,7 +13,7 @@ import { projectHealth } from "../services/projectHealth.js";
 const valid = (id) => mongoose.Types.ObjectId.isValid(id);
 const OPEN = ["Backlog", "To-Do", "In-Progress", "In-Review"];
 const MIN_SCORED = 3; // fewer scored tasks than this → no module average (it would point at one person)
-const pct = (done, total) => (total > 0 ? Math.round((done / total) * 100) : 0);
+import { pct } from "../services/moduleProgress.js"; // LB-1: one progress formula for Director and Team Lead
 const person = (u) => (u ? { id: u._id, name: u.name } : null);
 
 // Same org scope as GET /api/director/projects: the project's director belongs to the caller's organization.

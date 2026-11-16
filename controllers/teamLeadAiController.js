@@ -5,6 +5,7 @@
 import mongoose from "mongoose";
 import Organization from "../models/Organization.js";
 import Task from "../models/Task.js";
+import { withFit, fitNote } from "../services/assignFit.js";
 import Sprint from "../models/Sprint.js";
 import Milestone from "../models/Milestone.js";
 import AIPromptLog from "../models/AIPromptLog.js";
@@ -218,13 +219,20 @@ export async function assignHint(req, res) {
     candidates = wl.members.filter((m) => (ROLE_TASK_ELIGIBILITY[ROLE_TO_CATEGORY[m.role] ?? "developer"] ?? []).includes(type)).map((m) => ({ id: m.id, name: m.name, role: m.role, load: m.label, status: m.status, activeTasks: m.activeTasks }));
   }
   if (!candidates.length) return res.status(409).json({ error: "Nobody on this project can take this task, so there is nothing to suggest." });
+  // Items 53/54 (D-011): tell the AI each candidate's role category and whether it fits the task and the parent's domain.
+  const ownType = taskId ? (await Task.findById(taskId, "type").lean())?.type : String(req.body?.type ?? "Feature");
+  const parentId = taskId ? (await Task.findById(taskId, "parentId").lean())?.parentId : req.body?.parentId;
+  const parentType = parentId && valid(parentId) ? (await Task.findOne({ _id: parentId, ...s.scope.filter }, "type").lean())?.type : null;
+  const fit = withFit({ taskType: ownType, parentType, candidates });
+  candidates = fit.candidates; task = { ...task, ...fit.task };
   const usage = await gate(req, res, s); if (!usage) return;
   const refs = makeRefs();
   const data = { task, candidates: candidates.slice(0, 10).map(({ id, ...x }) => ({ ref: refs.add("c", id), ...x })) };
   try {
     const { value, fromCache } = await ask(req, { feature: "tl_assign_hint", promptId: "tl-assign-hint", data, check: (o) => validateAssignHint(o, refs) });
     const pick = candidates.find((x) => String(x.id) === refs.id(value.candidate));
-    res.json({ candidateId: pick.id, name: pick.name, reason: withNames(value.reason, Object.fromEntries(data.candidates.map((x) => [x.ref, x.name]))), usage: spent(usage, fromCache), aiGenerated: true });
+    const note = fitNote({ taskType: ownType, parentType, pick }); // advice only: shown to the Team Lead, never blocks
+    res.json({ candidateId: pick.id, name: pick.name, reason: withNames(value.reason, Object.fromEntries(data.candidates.map((x) => [x.ref, x.name]))), usage: spent(usage, fromCache), note, aiGenerated: true });
   } catch (err) { aiFail(res, err, usage); }
 }
 

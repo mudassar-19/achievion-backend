@@ -1,58 +1,39 @@
 import mongoose          from "mongoose";
 import Notification      from "../models/Notification.js";
 
-const TIER_FROM_TYPE = {
-  escalation:       "critical",
-  org_health_drop:  "critical",
-  system_incident:  "critical",
-  approval_pending: "needs_action",
-  project_at_risk:  "needs_action",
-};
-
-function tierFromType(type) {
-  return TIER_FROM_TYPE[type] ?? "fyi";
-}
+import { tierOf, tierFilter, countByTier } from "../services/notifTier.js";
 
 // ── GET /api/director/notifications ──────────────────────────────────────────
+// ?tier=&read=&limit= (max 200) &before=<ISO date of the last item seen> for the next page. → { data, hasMore }
+// The tier follows the type (services/notifTier.js), so old approval records stored as FYI show under Needs action.
 export async function listNotifications(req, res) {
   const userId = req.user.id;
-  const { tier, read, limit = "50" } = req.query;
+  const { tier, read, limit = "50", before } = req.query;
+  const take = Math.min(Number(limit) || 50, 200);
 
-  const q = { userId, muted: { $ne: true } };
-  if (tier  && ["critical","needs_action","fyi"].includes(tier)) q.tier = tier;
+  const now = new Date();
+  const and = [{ $or: [{ muteUntil: null }, { muteUntil: { $lte: now } }] }, { $or: [{ expiresAt: null }, { expiresAt: { $gt: now } }] }];
+  const tf = tierFilter(tier);
+  if (tf) and.push(tf);
+  const q = { userId, muted: { $ne: true }, $and: and };
   if (read  === "true")  q.read = true;
   if (read  === "false") q.read = false;
-  // Exclude muted notifications
-  q.$or = [{ muteUntil: null }, { muteUntil: { $lte: new Date() } }];
-  // Exclude expired
-  q.$and = [{ $or: [{ expiresAt: null }, { expiresAt: { $gt: new Date() } }] }];
+  if (before && !Number.isNaN(+new Date(before))) q.createdAt = { $lt: new Date(before) };
 
-  const docs = await Notification.find(q)
-    .sort({ createdAt: -1 })
-    .limit(Math.min(Number(limit) || 50, 200))
-    .lean();
-
-  // Back-fill tier from type for legacy records without it
-  const data = docs.map(n => ({
-    ...n,
-    tier: n.tier ?? tierFromType(n.type),
-  }));
-
-  res.json({ data });
+  const docs = await Notification.find(q).sort({ createdAt: -1 }).limit(take + 1).lean();
+  const data = docs.slice(0, take).map((n) => ({ ...n, tier: tierOf(n) }));
+  res.json({ data, hasMore: docs.length > take });
 }
 
 // ── GET /api/director/notifications/count ────────────────────────────────────
+// Unread totals per tier, muted ones excluded. { total, unread, critical, needs_action, fyi }
 export async function countNotifications(req, res) {
-  const userId = req.user.id;
-  const base   = { userId, read: false, $or: [{ muteUntil: null }, { muteUntil: { $lte: new Date() } }] };
-
-  const [total, critical, needs_action] = await Promise.all([
-    Notification.countDocuments({ ...base }),
-    Notification.countDocuments({ ...base, tier: "critical" }),
-    Notification.countDocuments({ ...base, tier: "needs_action" }),
+  const rows = await Notification.aggregate([
+    { $match: { userId: new mongoose.Types.ObjectId(req.user.id), read: false, muted: { $ne: true }, $or: [{ muteUntil: null }, { muteUntil: { $lte: new Date() } }] } },
+    { $group: { _id: { type: "$type", tier: "$tier" }, n: { $sum: 1 } } },
   ]);
-
-  res.json({ total, unread: total, critical, needs_action });
+  const c = countByTier(rows);
+  res.json({ ...c, unread: c.total });
 }
 
 // ── PATCH /api/director/notifications/:id/read ────────────────────────────────
@@ -74,8 +55,7 @@ export async function markRead(req, res) {
 export async function markAllRead(req, res) {
   const userId = req.user.id;
   const { tier } = req.body ?? {};
-  const q = { userId, read: false };
-  if (tier && ["critical","needs_action","fyi"].includes(tier)) q.tier = tier;
+  const q = { userId, read: false, ...(tierFilter(tier) ?? {}) }; // same tier rule as the list and the counts
   await Notification.updateMany(q, { $set: { read: true } });
   res.json({ ok: true });
 }

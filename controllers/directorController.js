@@ -15,8 +15,10 @@ import mongoose           from "mongoose";
 import { VALID_ROLES }    from "../models/User.js";
 import { awardXp, checkAndAwardBadges, DEFAULT_BADGE_THRESHOLDS, adjustUserXp } from "../services/gamificationService.js";
 import { projectHealth }  from "../services/projectHealth.js";
+import { orgQualityFactor } from "../services/orgQuality.js";
 import { xpZScore, Z_LIMIT } from "../services/anomalyRules.js";
 import XpLog from "../models/XpLog.js";
+import { shouldFlagAdjust } from "../services/xpAdjustRules.js";
 
 // Map a role string to its category label (mirrors ROLE_CATEGORY_MAP)
 function roleToCat(role) {
@@ -123,16 +125,19 @@ export async function getDashboard(req, res) {
   const org = await Organization.findOne(orgFilter(orgId), "_id").lean();
   const orgObjectId = org?._id ?? null;
 
-  const [activeProjects, pendingCount, burnoutProfiles] =
+  const [activeProjects, pendingCount, burnoutProfiles, avgAiScore] =
     await Promise.all([
       Project.countDocuments({ director: directorUserId, status: "Active" }),
       Approval.countDocuments({ orgId: orgObjectId, status: "PENDING" }),
       GamificationProfile.find({ orgId, hp: { $lt: 40 } })
         .populate("userId", "name role")
         .lean(),
+      org ? orgQualityFactor(String(org._id)).then((q) => q.score) : null,
     ]);
 
   res.json({
+    // F-071: the screen reads this key (the name is old; it is the org's review-star quality 0-100, same as Org Health).
+    avgAiScore,
     activeProjects,
     pendingApprovals: pendingCount,
     burnoutRisk:      burnoutProfiles.length,
@@ -569,6 +574,7 @@ const CATEGORY_ACTIONS = {
   employee:     ["role_change", "account_status_change", "account_deleted", "employee_created", "DIRECTOR_SETUP"],
   organization: ["ORG_CREATED", "workspace_updated", "GAMIFICATION_RESET"],
   project:      ["project_created", "project_updated", "project_xp_updated", "project_status_changed"],
+  xp:           ["xp_adjusted", "xp_adjust_flagged"], // item 8: the "XP adjustments" filter
 };
 
 // ── GET /api/director/audit-log ───────────────────────────────────────────────
@@ -834,8 +840,10 @@ export async function adjustXp(req, res) {
         try {
           const history = (await XpLog.find({ userId: target._id, source: "task_approved" }, "amount").sort({ createdAt: -1 }).limit(30).lean()).map((l) => l.amount);
           const z = xpZScore(history, Math.abs(amt));
-          const isOutlier = (z !== null && Math.abs(z) > Z_LIMIT) || Math.abs(amt) >= 300;
-          if (!isOutlier) return;
+          const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
+          const monthCount = await XpLog.countDocuments({ userId: target._id, source: "adjust", createdAt: { $gte: monthStart } });
+          // Item 8 (D-532): also flagged when it is the 3rd or later adjustment of the month
+          if (!shouldFlagAdjust({ amount: amt, monthCount, outlier: z !== null && Math.abs(z) > Z_LIMIT })) return;
           const mean = history.length >= 5 ? Math.round(history.reduce((s, v) => s + v, 0) / history.length) : null;
           await AuditLog.create({
             action:       "xp_adjust_flagged",

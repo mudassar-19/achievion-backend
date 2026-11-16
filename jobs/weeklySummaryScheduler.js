@@ -17,12 +17,12 @@ function matchesSchedule(aiSettings, now) {
 }
 
 async function runOnce(now) {
-  const orgs = await Organization.find({ "aiSettings.weeklySummaryEnabled": true },
-    "aiSettings _id").lean();
+  // Item 42: the weekly AI summary is always on for every org (the toggle is gone from Settings; the stored flag is ignored).
+  const orgs = await Organization.find({}, "aiSettings _id").lean();
 
   for (const org of orgs) {
     const orgId    = String(org._id);
-    const settings = org.aiSettings;
+    const settings = org.aiSettings ?? {}; // old organisation documents may not have aiSettings at all
 
     if (!matchesSchedule(settings, now)) continue;
 

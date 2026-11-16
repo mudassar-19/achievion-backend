@@ -53,6 +53,16 @@ export function countWorkingDays(start, end, workingDays = DEFAULT_WORKING_DAYS,
   return Math.max(1, count);
 }
 
+// Item 58: working days from today to a due date, both included, in the org's time zone and working days.
+// null without a due date; 0 when the date is past or only days off remain (unlike countWorkingDays, never forced to 1).
+export function workingDaysLeft(now, due, { workingDays = DEFAULT_WORKING_DAYS, timezone = "Asia/Karachi" } = {}) {
+  if (!due) return null;
+  const toDay = (dt) => Date.parse(`${localDate(new Date(dt), timezone)}T00:00:00Z`);
+  let n = 0;
+  for (let c = toDay(now), e = toDay(due); c <= e; c += 86_400_000) if (workingDays.includes(new Date(c).getUTCDay())) n++;
+  return n;
+}
+
 // RND-27: days = ceil(hours / hoursPerDay). Hours stay the stored estimate; nothing here rewrites dates.
 export function workingDaysNeeded(hours, hoursPerDay) {
   return hours > 0 && hoursPerDay > 0 ? Math.ceil(hours / hoursPerDay) : 0;

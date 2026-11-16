@@ -137,7 +137,7 @@ export async function reindexOrg(orgId, mongoose) {
   const snap = await db.collection("orghealthsnapshots").findOne({ orgId }, { sort: { calculatedAt: -1 } });
   if (snap) {
     docs.push({ id: `${orgId}:health:latest`, orgId, role: null,
-      text: `Org Health Score: ${snap.overall}. Delivery: ${snap.subScores?.delivery ?? "N/A"} Capacity: ${snap.subScores?.capacity ?? "N/A"} Risk: ${snap.subScores?.risk ?? "N/A"} Quality: ${snap.subScores?.quality ?? "N/A"}`,
+      text: `Org Health Score: ${snap.overall ?? "not enough data"}. Delivery: ${snap.subScores?.delivery ?? "N/A"} Capacity: ${snap.subScores?.capacity ?? "N/A"} Risk: ${snap.subScores?.risk ?? "N/A"} Quality: ${snap.subScores?.quality ?? "N/A"}`,
       source: "org-health", ref: snap._id.toString() })
   }
 

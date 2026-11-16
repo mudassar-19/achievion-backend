@@ -70,7 +70,7 @@ const mgr = requireRole("Manager");
 router.get("/projects",                             getProjects);
 // M-2 Projects (Manager only; static paths before /projects/:id)
 router.get("/projects/list",                        mgr, mp.listProjects);
-router.post("/projects", mgr, ...attachmentUpload("attachments", 10), createProject);
+router.post("/projects", mgr, ...attachmentUpload("attachments", 5), createProject);
 router.get("/projects/:id",                         getProjectById);
 router.patch("/projects/:id",                       mgr, mp.editProject);
 router.post("/projects/:id/archive",                mgr, mp.archiveProject);

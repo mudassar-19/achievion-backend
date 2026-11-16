@@ -9,9 +9,14 @@ import User from "../models/User.js";
 import Milestone from "../models/Milestone.js";
 import AuditLog from "../models/AuditLog.js";
 import OperationalRequest from "../models/OperationalRequest.js";
-import { createTask, resolveLinks, commentMembers } from "./taskController.js";
+import { createTask, resolveLinks, commentMembers, subtaskHoursLimit, parentHoursLimit } from "./taskController.js";
 import { REACTIONS } from "../services/commentRules.js";
-import { getTaskDetail as mgrTaskDetail } from "./managerProjectsController.js";
+import { getTaskDetail as mgrTaskDetail, orgScope } from "./managerProjectsController.js";
+import { startInPast } from "../services/startDateRules.js";
+import { planSuggestion } from "../services/planSuggestion.js";
+import { estimatedXp } from "../services/estimatedXp.js";
+import Organization from "../models/Organization.js";
+import { orgWorkTime } from "../services/workloadRules.js";
 import { requestExtension } from "./extensionController.js";
 import { createNotification } from "./notificationController.js";
 import { tlScope, projectIn, taskIn, writableSprint } from "./teamLeadWorkController.js";
@@ -24,10 +29,12 @@ import { ROLE_TASK_ELIGIBILITY, ROLE_TO_CATEGORY } from "../services/workloadSer
 import { reassignBlockers } from "../services/resourceRules.js";
 import { capture, passOn } from "../utils/capture.js";
 import { fileStore } from "../middleware/upload.js";
+import { TYPES, PRIORITIES } from "../services/taskFormRules.js";
 import { validateTaskInput, groupTasks, canDeleteTask, isBlocked, validateSavedFilter, validateBulk, bulkSprintPlan, MAX_SAVED_FILTERS } from "../services/taskFormRules.js";
 
 const valid = (id) => mongoose.isValidObjectId(id) && /^[0-9a-f]{24}$/i.test(String(id));
 const OID = (x) => new mongoose.Types.ObjectId(String(x));
+const IS_OID = /^[0-9a-f]{24}$/i;
 const fail = (res, errors) => res.status(400).json({ error: Object.values(errors)[0], fields: errors });
 const QUALITY = ["acceptanceCriteria", "benchmark", "qaRequired"];
 
@@ -41,6 +48,9 @@ export async function createTasks(req, res) {
   const p = valid(body.projectId) ? projectIn(s, body.projectId) : null;
   if (!p) return res.status(404).json({ error: "Project not found in your projects." });
   const { errors, value } = validateTaskInput(body);
+  delete value.xpValue; // item 52 (D-527): a Team Lead types no XP; it comes from the engine
+  const pastStart = startInPast(value.startDate, new Date(), s.scope.org.workingTime?.timezone); // item 50 (tasks and subtasks)
+  if (pastStart) errors.startDate = pastStart;
   const mode = ["single", "group"].includes(body.assign?.mode) ? body.assign.mode : "none";
   const people = mode === "single" ? [body.assign?.userId] : mode === "group" ? (Array.isArray(body.assign?.userIds) ? body.assign.userIds : []) : [];
   const members = new Set((p.members ?? []).map((m) => String(m._id ?? m)));
@@ -70,7 +80,7 @@ export async function createTasks(req, res) {
     const r = await capture(createTask, req, { body: b });
     if (r.status >= 400) { // all or nothing: undo the tasks this request made
       if (created.length) await Task.deleteMany({ _id: { $in: created.map((t) => t._id) }, createdBy: req.user.id });
-      return res.status(r.status).json({ error: r.body?.error ?? "The task could not be created.", ...(created.length ? { undone: created.length } : {}) });
+      return res.status(r.status).json({ error: r.body?.error ?? "The task could not be created.", ...(r.body?.fields ? { fields: r.body.fields } : {}), ...(r.body?.parentId ? { parentId: r.body.parentId } : {}), ...(created.length ? { undone: created.length } : {}) });
     }
     const t = r.body.task ?? r.body;
     created.push(t);
@@ -83,11 +93,48 @@ export async function createTasks(req, res) {
     tasks: created.map((t) => ({ id: t._id, title: t.title, assignee: t.assignee ?? null, status: t.status })) });
 }
 
+// ── POST /api/teamlead/plan-suggest { projectId, estimatedHours, startDate? } ───
+// Item 53: suggested start, deadline and sprint from the estimate and the org's Working Time. Nothing is saved; the form's "Use" applies it.
+export async function planSuggest(req, res) {
+  const s = await tlScope(req, res); if (!s) return;
+  const { projectId, estimatedHours, startDate } = req.body ?? {};
+  const p = valid(projectId) ? projectIn(s, projectId) : null;
+  if (!p) return res.status(404).json({ error: "Project not found in your projects." });
+  if (!(Number(estimatedHours) > 0)) return res.status(400).json({ error: "Give an estimate in hours first (1 to 14).", fields: { estimatedHours: "Give an estimate in hours first (1 to 14)." } });
+  const sprints = await Sprint.find({ projectId: p._id, ...s.scope.filter }, "name status startDate endDate").lean();
+  res.json({ suggestion: planSuggestion({ hours: estimatedHours, startDate, wt: orgWorkTime(s.scope.org), sprints: sprints.map((x) => ({ ...x, id: x._id })) }), aiGenerated: false });
+}
+
+// ── POST /api/teamlead/xp-estimate { type, priority } ─── item 52 (D-527): read-only "Estimated XP" for the form.
+export async function xpEstimate(req, res) {
+  const { type, priority } = req.body ?? {};
+  if (!TYPES.includes(type) || !PRIORITIES.includes(priority)) return res.status(400).json({ error: "Pick a category and a priority first." });
+  const org = await Organization.findOne(IS_OID.test(String(req.user.orgId)) ? { _id: req.user.orgId } : { orgId: req.user.orgId }, "gamificationRules").lean();
+  res.json({ estimatedXp: estimatedXp({ type, priority, rules: org?.gamificationRules ?? null }), basis: "A 3-star task of this category and priority, handed in on time." });
+}
+
 // ── PATCH /api/teamlead/tasks/:id/edit ──────────────────────────────────────
 export async function editTask(req, res) {
-  const task = await Task.findById(req.params.id, "status projectId deadline title").lean();
+  const task = await Task.findById(req.params.id, "status projectId deadline title startDate estimatedHours parentId").lean();
   if (task.status === "Done") return res.status(409).json({ error: "A done task cannot be edited." });
   const { errors, value } = validateTaskInput(req.body ?? {}, { mode: "edit" });
+  delete value.xpValue; delete errors.xpValue; // item 52 (D-527)
+  // Item 51 (D-526): subtask hours may not exceed the parent's estimate, and a parent may not drop below its subtasks.
+  if (value.estimatedHours !== undefined || req.body.parentId !== undefined) {
+    const parentId = req.body.parentId !== undefined ? req.body.parentId : task.parentId;
+    const hours = value.estimatedHours ?? task.estimatedHours;
+    const over = await subtaskHoursLimit(req.user.orgId, { parentId, selfId: req.params.id, hours });
+    if (over) return res.status(400).json({ error: over.message, fields: { estimatedHours: over.message }, parentId: over.parentId });
+    if (value.estimatedHours !== undefined) {
+      const low = await parentHoursLimit(req.user.orgId, { taskId: req.params.id, hours: value.estimatedHours });
+      if (low) return res.status(400).json({ error: low.message, fields: { estimatedHours: low.message } });
+    }
+  }
+  if (value.startDate) { // item 50: only a changed start date is checked, so older tasks stay editable
+    const org = (await orgScope(req.user.orgId))?.org;
+    const past = startInPast(value.startDate, new Date(), org?.workingTime?.timezone, { unchangedFrom: task.startDate });
+    if (past) errors.startDate = past;
+  }
   if (Object.keys(errors).length) return fail(res, errors);
   if (req.body.dependsOn !== undefined || req.body.parentId !== undefined) {
     const { error, links } = await resolveLinks(req.user.orgId, { parentId: req.body.parentId, dependsOn: req.body.dependsOn }, req.params.id);

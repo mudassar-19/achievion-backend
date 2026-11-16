@@ -10,6 +10,15 @@ const LEADS = [
   G("mention", "Mentions", "Someone names you in a task comment.", ["mention"]),
   G("decisions", "Approvals and decisions", "Things that wait for your decision.", ["approval_required", "needs_action", "manager_decision_required", "critical"], true),
 ];
+// Item 39/43: the Director's personal choices. Approvals and escalations need an answer, so they stay on (locked).
+const DIRECTOR = [
+  G("approval_pending", "Approval pending", "An account request waits for your decision.", ["approval_pending", "approval_required"], true),
+  G("escalation", "Escalation raised", "Something was escalated to you.", ["escalation"], true),
+  G("project_at_risk", "Project at risk", "A project's health falls into At risk or Off track.", ["project_at_risk"]),
+  G("org_health_drop", "Org health drop", "The organisation health score drops.", ["org_health_drop"]),
+  G("recap_ready", "Recap ready", "A weekly or monthly recap is ready to read.", ["recap_ready"]),
+  G("system_incident", "System incident", "A problem with the system itself.", ["system_incident"]),
+];
 const TEAM_LEAD = [
   G("new_module", "New module for you", "Your Manager assigns you a module. You accept it or ask a question.", ["project_module_assigned"], true),
   G("task_assigned", "Task assigned or moved", "A task is assigned to you or moved between people.", ["task_assigned", "task_reassigned"]),
@@ -38,7 +47,8 @@ const CONTRIBUTOR = [
 const base = (role) => String(role ?? "").replace(/^(Senior|Junior) /, "");
 export function groupsFor(role) {
   const r = base(role);
-  if (r === "Manager" || r === "Director") return LEADS;
+  if (r === "Director") return DIRECTOR;
+  if (r === "Manager") return LEADS;
   if (r === "Team Lead") return TEAM_LEAD;
   return CONTRIBUTOR;
 }

@@ -12,6 +12,7 @@ import {
   listDeletedEmployees,
   listCustomRolesForOrg,
 } from "../controllers/orgAdminController.js";
+import { orgDecisions } from "../controllers/decisionController.js";
 import { verifyOrgToken } from "../middleware/orgAuth.js";
 
 const router = Router();
@@ -37,6 +38,7 @@ router.patch("/employees/:userId/status",  updateEmployeeStatus);
 router.delete("/employees/:userId",        deleteEmployee);
 
 router.get("/approvals",                   listOrgApprovals);
+router.get("/decisions",                   orgDecisions);        // items 10/55: decided requests with both notes
 router.get("/custom-roles",               listCustomRolesForOrg);
 
 export default router;

@@ -4,6 +4,7 @@
 // No (or incomplete) config → MailNotConfiguredError (503 for the API, silence for offline e-mail); the server never crashes over mail.
 // Failures throw a short error with status 502 and NO key, recipient, code or provider text in the message.
 import nodemailer from "nodemailer";
+import { emailDisabled } from "./jobsFlag.js";
 import { mailConfig, resetEmail } from "../services/passwordReset.js";
 
 export class MailNotConfiguredError extends Error {
@@ -20,6 +21,7 @@ export function parseFrom(s) {
 
 // ponytail: BREVO_API_BASE and MAIL_TIMEOUT_MS exist for the tests' fake server; production leaves them unset (api.brevo.com, 10 s).
 export function providerConfig(env = process.env) {
+  if (emailDisabled(env)) return null; // DISABLE_EMAIL=1: a local server on the shared database sends nothing
   const provider = String(env.MAIL_PROVIDER || "smtp").trim().toLowerCase();
   if (provider === "smtp") { const smtp = mailConfig(env); return smtp ? { provider, smtp } : null; }
   if (provider === "brevo-api") {

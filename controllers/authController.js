@@ -309,7 +309,8 @@ export async function getProfile(req, res) {
       tasksDone:     doneTasks.length,
       totalTasks:    tasks.length,
       onTimePct,
-      recentXpLog:   recentXp.map((l) => ({ source: l.source, amount: l.amount, createdAt: l.createdAt })),
+      recentXpLog:   recentXp.map((l) => ({ source: l.source, amount: l.amount, createdAt: l.createdAt,
+        ...(l.source === "adjust" ? { label: "Director adjustment", reason: l.reason ?? null } : {}) })), // item 8
     },
   });
 }

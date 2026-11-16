@@ -10,6 +10,7 @@ import { getIo }          from "../utils/io.js";
 import { reversalPlan }   from "./anomalyRules.js";
 import { orgWorkTime }    from "./workloadRules.js";
 import { orgAlertSettings } from "./alertRules.js";
+import { monthlyAdjustError } from "./xpAdjustRules.js";
 import { streakDayInfo, lastJudgeableDate, judgeProfileStreak, localDayBoundsUTC } from "./streakService.js";
 
 const IS_OBJECT_ID = /^[0-9a-f]{24}$/i;
@@ -763,6 +764,12 @@ export async function adjustUserXp({ directorId, userId, orgId, amount, reason, 
     const e = new Error("Maximum 3 XP adjustments per employee per day."); e.status = 429; throw e;
   }
 
+  // Item 8 (D-532): at most 5 adjustments and 1000 XP (either direction) per employee per calendar month.
+  const monthStart = new Date(); monthStart.setDate(1); monthStart.setHours(0, 0, 0, 0);
+  const monthRows = await XpLog.find({ userId, source: "adjust", createdAt: { $gte: monthStart } }, "amount").lean();
+  const monthErr = monthlyAdjustError({ monthCount: monthRows.length, monthAbsTotal: monthRows.reduce((s, r) => s + Math.abs(r.amount), 0), amount });
+  if (monthErr) { const e = new Error(monthErr); e.status = 429; throw e; }
+
   let profile = await GamificationProfile.findOne({ userId });
   if (!profile) profile = await GamificationProfile.create({ userId, orgId });
 
@@ -776,7 +783,7 @@ export async function adjustUserXp({ directorId, userId, orgId, amount, reason, 
   const applied = amount;
 
   try {
-    await XpLog.create({ userId, orgId, amount: applied, source: "adjust", ...(adjustId ? { adjustId: String(adjustId) } : {}) });
+    await XpLog.create({ userId, orgId, amount: applied, source: "adjust", reason: String(reason ?? "").trim().slice(0, 300), ...(adjustId ? { adjustId: String(adjustId) } : {}) });
   } catch (err) {
     if (err?.code === 11000) return { ok: true, duplicate: true, before: null, after: null };
     throw err;

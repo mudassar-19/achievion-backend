@@ -15,6 +15,7 @@ import crypto from "crypto";
 import AIPromptLog  from "../models/AIPromptLog.js";
 import Organization from "../models/Organization.js";
 import { scrubPii }  from "./aiService.js";
+import { dailyCapUsd } from "./aiCap.js";
 
 // ── Injection neutralization ──────────────────────────────────────────────────
 // Strips patterns that attempt to escape data context. Defense-in-depth;
@@ -174,7 +175,7 @@ export async function callChain({ feature, data, orgId, requestedBy, promptId, p
   // Daily cost cap
   const IS_OID = /^[0-9a-f]{24}$/i;
   const org = await Organization.findOne(IS_OID.test(orgId) ? { _id: orgId } : { orgId }).select("aiSettings").lean();
-  const cap   = org?.aiSettings?.costCapUsdPerDay ?? 2.0;
+  const cap   = dailyCapUsd(org, 2.0); // env AI_DAILY_COST_CAP_USD wins (item 42)
   const spent = await dailyCostUsd(orgId);
   if (spent >= cap) {
     const err = new Error(`Daily AI cost cap reached (${cap} USD)`); err.status = 429; throw err;

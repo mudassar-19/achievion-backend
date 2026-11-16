@@ -54,6 +54,24 @@ export async function resolveLinks(orgId, { parentId, dependsOn }, selfId = null
   return { links };
 }
 
+// Item 51 (D-526): the error when `hours` for a subtask of `parentId` (ignoring the task `selfId` itself) would exceed the parent's estimate.
+export async function subtaskHoursLimit(orgId, { parentId, selfId = null, hours }) {
+  if (!parentId || !(Number(hours) > 0)) return null;
+  const [parent, sibs] = await Promise.all([
+    Task.findOne({ _id: parentId, orgId }, "estimatedHours").lean(),
+    Task.find({ parentId, orgId, isDeleted: { $ne: true }, ...(selfId ? { _id: { $ne: selfId } } : {}) }, "estimatedHours").lean(),
+  ]);
+  const message = subtaskHoursError({ parentHours: parent?.estimatedHours, siblingHours: sibs.map((s) => s.estimatedHours), newHours: hours });
+  return message ? { message, parentId: String(parentId) } : null;
+}
+// Changing a parent's own estimate: not below what its subtasks add up to.
+export async function parentHoursLimit(orgId, { taskId, hours }) {
+  if (!(Number(hours) > 0)) return null;
+  const kids = await Task.find({ parentId: taskId, orgId, isDeleted: { $ne: true } }, "estimatedHours").lean();
+  const message = parentHoursError({ newParentHours: hours, childHours: kids.map((k) => k.estimatedHours) });
+  return message ? { message } : null;
+}
+
 // V1 1.9: list unfinished prerequisites of a task (empty = free to start/submit).
 async function blockingPrereqs(task) {
   if (!task.dependsOn?.length) return [];
@@ -69,6 +87,9 @@ function badXpValue(v) {
 }
 import { getIo }       from "../utils/io.js";
 import { validateTaskAssignment, ROLE_TO_CATEGORY, ROLE_TASK_ELIGIBILITY } from "../services/workloadService.js";
+import { orgScope } from "./managerProjectsController.js";
+import { startInPast } from "../services/startDateRules.js";
+import { subtaskHoursError, parentHoursError } from "../services/subtaskHours.js";
 
 // S-1 (D-158): router.param guard for employees on /api/tasks/:id*.
 export async function employeeTaskScope(req, res, next) {
@@ -131,8 +152,14 @@ export async function createTask(req, res) {
   if (!type)          return res.status(400).json({ error: "Type is required." });
   const xpErr = badXpValue(xpValue);
   if (xpErr) return res.status(400).json({ error: xpErr });
+  if (startDate) { // item 50
+    const past = startInPast(startDate, new Date(), (await orgScope(orgId))?.org?.workingTime?.timezone);
+    if (past) return res.status(400).json({ error: past, fields: { startDate: past } });
+  }
   const { error: linkErr, links } = await resolveLinks(req.user.orgId, { parentId, dependsOn });
   if (linkErr) return res.status(400).json({ error: linkErr });
+  const over = await subtaskHoursLimit(req.user.orgId, { parentId, hours: estimatedHours }); // item 51
+  if (over) return res.status(400).json({ error: over.message, fields: { estimatedHours: over.message }, parentId: over.parentId });
 
   // ── Director cannot assign tasks ──────────────────────────────────────────
   if (assignerRole === "Director") {

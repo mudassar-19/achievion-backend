@@ -9,6 +9,7 @@
 
 import AIPromptLog  from "../models/AIPromptLog.js";
 import Organization from "../models/Organization.js";
+import { dailyCapUsd } from "./aiCap.js";
 
 // ── Provider selection ────────────────────────────────────────────────────────
 const AI_PROVIDER_NAME = (process.env.AI_PROVIDER ?? "openai").toLowerCase();
@@ -59,7 +60,7 @@ export async function callAI({ feature, data, orgId, requestedBy }, provider = n
   const org = await Organization.findOne(IS_OID.test(orgId) ? { _id: orgId } : { orgId })
     .select("aiSettings").lean();
 
-  const cap   = org?.aiSettings?.costCapUsdPerDay ?? 1.0;
+  const cap   = dailyCapUsd(org, 1.0); // env AI_DAILY_COST_CAP_USD wins (item 42)
   const spent = await dailyCostUsd(orgId);
   if (spent >= cap) {
     const err = new Error(`Daily AI cost cap reached (${cap} USD)`); err.status = 429; throw err;
