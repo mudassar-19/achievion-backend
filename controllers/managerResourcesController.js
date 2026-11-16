@@ -14,6 +14,7 @@ import { createNotification } from "./notificationController.js";
 import { orgScope } from "./managerProjectsController.js";
 import { getBulkWorkloadSnapshots, ROLE_TASK_ELIGIBILITY, ROLE_TO_CATEGORY } from "../services/workloadService.js";
 import { orgWorkTime, dailyHoursForTask } from "../services/workloadRules.js";
+import { getAlertSettings } from "../services/alertRules.js";
 import {
   effectiveThreshold, validateThreshold, statusBadge, loadLabel, loadTone, barPct, hpTier, needsLighterLoad, dueThisWeek,
   reassignBlockers, reassignUpdate, previewLoad, candidateReason, rankCandidates, validateAssetInput, expiryState, REASSIGNABLE,
@@ -30,7 +31,8 @@ async function scopeOr404(req, res) {
 }
 const thresholdOf = async (scope, managerId) => {
   const me = await User.findById(managerId, "workloadThresholdPct").lean();
-  return { pct: effectiveThreshold(scope.org.workloadThresholdPct, me?.workloadThresholdPct), default: scope.org.workloadThresholdPct ?? 100, override: me?.workloadThresholdPct ?? null };
+  const orgDefault = getAlertSettings(scope.org).overloadLimitPct; // H1a: Director Settings > Alerts, else the old org threshold
+  return { pct: effectiveThreshold(orgDefault, me?.workloadThresholdPct), default: orgDefault, override: me?.workloadThresholdPct ?? null };
 };
 const log = (scope, req, action, detail, extra = {}) => AuditLog.create({ action, orgId: scope.org._id, performedBy: req.user.id, detail, ...extra })
   .catch((e) => console.error("[audit]", e.message));
@@ -150,7 +152,7 @@ export async function getCandidates(req, res) {
     getBulkWorkloadSnapshots([fromId, ...pool.map((u) => u._id)], { workTime }), thresholdOf(scope, req.user.id), User.findById(fromId, "name role").lean(),
   ]);
   const snapOf = new Map(snaps.map((s) => [String(s.userId), s]));
-  const delta = dailyHoursForTask(task, new Date(), workTime.workingDays);
+  const delta = dailyHoursForTask(task, new Date(), workTime.workingDays, workTime.timezone);
   const eligible = [], other = [];
   for (const u of pool) {
     const s = snapOf.get(String(u._id)); if (!s) continue;

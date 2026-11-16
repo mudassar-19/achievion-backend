@@ -5,10 +5,12 @@ import Notification from "../models/Notification.js";
 import GamificationProfile from "../models/GamificationProfile.js";
 import { getIo } from "../utils/io.js";
 import { notifyBurnout } from "../services/gamificationService.js";
-import { DEADLINE_ALERT_HOURS, MISSED_DEADLINE_HP, deadlineAudience } from "../services/xpEngine.js";
+import { DEADLINE_ALERT_HOURS, MISSED_DEADLINE_HP, deadlineAudience, deadlineAlertDue } from "../services/xpEngine.js";
+import Organization from "../models/Organization.js";
 import Milestone from "../models/Milestone.js";
 import Project from "../models/Project.js";
 import User from "../models/User.js";
+import { effectiveDeadline } from "../services/streakService.js";
 
 const OPEN = ["Backlog", "To-Do", "In-Progress"];
 const recipients = (t) => deadlineAudience(t).assignees;
@@ -28,22 +30,29 @@ async function notify(userId, orgId, type, tier, title, message, taskId, deepLin
 
 export async function sendDeadlineAlerts(now = new Date()) {
   const soon = new Date(now.getTime() + DEADLINE_ALERT_HOURS * 3_600_000);
-  const due = await Task.find({ status: { $in: OPEN }, deadline: { $gt: now, $lte: soon }, deadlineAlertSentAt: null },
-    "_id orgId title deadline assignees assignee milestoneId projectId").lean();
+  // H1a: an org that set a "deadline warning point" (Settings > Alerts) is judged by it; every other org keeps the 24 h window.
+  const orgs = await Organization.find({ "alertSettings.orgRules.deadlineWarnPct": { $type: "number" } }, "_id orgId alertSettings").lean();
+  const pctOf = new Map(orgs.flatMap((o) => [String(o._id), o.orgId].filter(Boolean).map((k) => [k, o.alertSettings.orgRules.deadlineWarnPct])));
+  // ponytail: pct orgs read every open task with a future deadline once an hour; add an index on deadline if that gets big.
+  const candidates = await Task.find({ status: { $in: OPEN }, deadlineAlertSentAt: null,
+    $or: [{ deadline: { $gt: now, $lte: soon } }, { orgId: { $in: [...pctOf.keys()] }, deadline: { $gt: now } }] },
+    "_id orgId title deadline assignees assignee milestoneId projectId status createdAt").lean();
+  const due = candidates.filter((t) => deadlineAlertDue(t, now, pctOf.get(String(t.orgId)) ?? null));
   let sent = 0;
   for (const t of due) {
+    const alertTitle = pctOf.has(String(t.orgId)) ? "Deadline approaching" : "Deadline in 24 hours";
     // Atomic claim: only one run (or instance) sends the alert for this task.
     const claimed = await Task.updateOne({ _id: t._id, deadlineAlertSentAt: null }, { $set: { deadlineAlertSentAt: now } });
     if (!claimed.modifiedCount) continue;
     const hours = Math.max(1, Math.round((new Date(t.deadline) - now) / 3_600_000));
     const { assignees, leads } = deadlineAudience(t, await leadsOf(t));
     for (const uid of assignees) {
-      await notify(uid, t.orgId, "deadline_soon", "needs_action", "Deadline in 24 hours",
+      await notify(uid, t.orgId, "deadline_soon", "needs_action", alertTitle,
         `"${t.title}" is due in about ${hours} h. Submit it or ask your Team Lead for an extension.`, t._id);
       sent++;
     }
     for (const uid of leads) {
-      await notify(uid, t.orgId, "deadline_soon", "needs_action", "Deadline in 24 hours",
+      await notify(uid, t.orgId, "deadline_soon", "needs_action", alertTitle,
         `"${t.title}" is due in about ${hours} h${assignees.length ? "" : " and nobody is assigned"}.`, t._id, `/teamlead/tasks?task=${t._id}`);
       sent++;
     }
@@ -51,11 +60,25 @@ export async function sendDeadlineAlerts(now = new Date()) {
   return sent;
 }
 
+// F-049: Backlog tasks are not started work, so they never cost HP. F-007: date-only deadlines end at the org's local midnight.
+const CHARGEABLE = OPEN.filter((s) => s !== "Backlog");
+const LOOKBACK_MS = 7 * 86_400_000;
+export function isMissedDeadline(t, now, timezone) {
+  if (!CHARGEABLE.includes(t.status) || !t.deadline) return false;
+  const eff = effectiveDeadline(t.deadline, timezone).getTime();
+  return eff <= now.getTime() && eff > now.getTime() - LOOKBACK_MS;
+}
+
 export async function chargeMissedDeadlines(now = new Date()) {
   // ponytail: 7-day look-back so the first run doesn't charge years of old overdue tasks at once; widen if the job may be down longer.
-  const since  = new Date(now.getTime() - 7 * 86_400_000);
-  const missed = await Task.find({ status: { $in: OPEN }, deadline: { $lte: now, $gt: since }, overduePenaltyAt: null },
-    "_id orgId title assignees assignee milestoneId projectId").lean();
+  // The effective deadline is never earlier than the stored one, so "stored <= now" is a safe superset; 2 extra days cover the shift.
+  const since  = new Date(now.getTime() - LOOKBACK_MS - 2 * 86_400_000);
+  const cands = await Task.find({ status: { $in: CHARGEABLE }, deadline: { $lte: now, $gt: since }, overduePenaltyAt: null },
+    "_id orgId title assignees assignee milestoneId projectId status deadline").lean();
+  const tzOf = new Map();
+  for (const o of await Organization.find({}, "_id orgId workingTime.timezone").lean())
+    for (const k of [String(o._id), o.orgId].filter(Boolean)) tzOf.set(k, o.workingTime?.timezone || "Asia/Karachi");
+  const missed = cands.filter((t) => isMissedDeadline(t, now, tzOf.get(String(t.orgId)) || "Asia/Karachi"));
   let charged = 0;
   for (const t of missed) {
     const claimed = await Task.updateOne({ _id: t._id, overduePenaltyAt: null }, { $set: { overduePenaltyAt: now } });

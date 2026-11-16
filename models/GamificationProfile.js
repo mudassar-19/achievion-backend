@@ -32,6 +32,11 @@ const gpSchema = new Schema(
     // Date of last daily-streak increment (set inline on approval; cron only resets)
     lastStreakDate: { type: Date, default: null },
 
+    // RND-19: working-day streak history + cron catch-up sentinel
+    previousDaily: { type: Number, default: 0, min: 0 }, // streak value just before last reset
+    longestDaily:  { type: Number, default: 0, min: 0 }, // all-time best daily streak
+    lastJudgedDate: { type: Date, default: null },        // last UTC Date the cron judged this profile
+
     // ── Badges ───────────────────────────────────────────────────────────────
     badges: [
       {

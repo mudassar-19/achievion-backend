@@ -135,6 +135,22 @@ export function prune(v, { maxArray = 12, maxString = 160, depth = 0 } = {}) {
   return v;
 }
 
+// F-058 / D-022g: a prompt carries references and roles, never a person's name. A person is any object with a `role`
+// (`name` is dropped); `assignee` / `people` hold names, so they become the person's reference, or "a teammate" if unknown.
+// Returns a copy; the caller keeps the names to map answers back (withNames).
+export function hidePeople(data) {
+  const refOf = new Map();
+  (function find(v) { if (Array.isArray(v)) v.forEach(find); else if (v && typeof v === "object") { if (v.role && v.name && v.ref) refOf.set(v.name, v.ref); Object.values(v).forEach(find); } })(data);
+  const who = (s) => String(s).split(", ").map((n) => refOf.get(n) ?? "a teammate").join(", ");
+  return (function walk(v) {
+    if (Array.isArray(v)) return v.map(walk);
+    if (!v || typeof v !== "object" || v instanceof Date || v._bsontype) return v;
+    const person = "role" in v;
+    return Object.fromEntries(Object.entries(v).filter(([k]) => !(person && k === "name")).map(([k, x]) =>
+      [k, k === "assignee" && typeof x === "string" ? who(x) : k === "people" && Array.isArray(x) ? x.map(who) : walk(x)]));
+  })(data);
+}
+
 // Text the Manager reads shows names, never references: "m1 (Ana)" / "Ana (m1)" / "m1" → "Ana".
 export function withNames(text, names = {}) {
   return String(text ?? "")

@@ -20,10 +20,11 @@ import { parseJsonLoose } from "../services/aiEvalRules.js";
 import { getBulkWorkloadSnapshots } from "../services/workloadService.js";
 import { orgWorkTime } from "../services/workloadRules.js";
 import { effectiveThreshold, statusBadge, loadLabel } from "../services/resourceRules.js";
+import { getAlertSettings } from "../services/alertRules.js";
 import {
   makeRefs, dailyLimit, usageState, dayKey, cacheKey, contextFromPath, resolveContext, PROMPTS_FOR, sourcesFor, proactiveCards, prune,
   withNames, validateChat, validateInsight, validateNarrative, validateScope, validateLessonsDraft, validateChallengeDraft, validateRebalance, validateExplain,
-  FEATURE_PREFIX,
+  FEATURE_PREFIX, hidePeople,
 } from "../services/managerAiRules.js";
 import { orgScope } from "./managerProjectsController.js";
 import { capture, passOn } from "../utils/capture.js";
@@ -78,7 +79,7 @@ async function ask(req, { feature, promptId, data, check }) {
   const r = await callChain({
     feature, orgId: req.user.orgId, requestedBy: req.user.id, promptId: prompt.id, promptVersion: prompt.version,
     systemPrompt: prompt.system, temperature: prompt.temperature, maxTokens: prompt.maxTokens, maxInvalid: 2,
-    userMessage: prompt.userTemplate(data), validate: (t) => check(parseJsonLoose(t)).ok,
+    userMessage: prompt.userTemplate(hidePeople(data)), validate: (t) => check(parseJsonLoose(t)).ok,
   });
   const v = check(parseJsonLoose(r.text));
   if (!v.ok) throw Object.assign(new Error("invalid"), { status: 422 });
@@ -95,7 +96,7 @@ const endOfDay = () => { const d = new Date(); d.setHours(24, 0, 0, 0); return +
 async function workload(scope, userId) {
   const users = await User.find({ ...scope.filter, status: { $ne: "deleted" }, role: { $nin: LEADERS } }, "_id").lean();
   const [snaps, me] = await Promise.all([getBulkWorkloadSnapshots(users.map((u) => u._id), { workTime: orgWorkTime(scope.org) }), User.findById(userId, "workloadThresholdPct").lean()]);
-  const threshold = effectiveThreshold(scope.org.workloadThresholdPct, me?.workloadThresholdPct);
+  const threshold = effectiveThreshold(getAlertSettings(scope.org).overloadLimitPct, me?.workloadThresholdPct);
   return { threshold, members: snaps.map((s) => ({ id: s.userId, name: s.name, role: s.role, utilisation: s.utilisation, load: loadLabel(s.utilisation),
     status: statusBadge({ utilisation: s.utilisation, hp: s.hp, threshold }), activeTasks: s.activeTaskCount, freeHoursPerDay: s.availableHours })).sort((a, b) => b.utilisation - a.utilisation) };
 }

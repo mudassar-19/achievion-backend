@@ -14,6 +14,7 @@ import { connectDB }                       from "./config/db.js";
 import authRoutes                          from "./routes/authRoutes.js";
 import orgRoutes                           from "./routes/orgRoutes.js";
 import directorRoutes                      from "./routes/directorRoutes.js";
+import directorProjectsRoutes              from "./routes/directorProjectsRoutes.js";
 import managerRoutes                       from "./routes/managerRoutes.js";
 import taskRoutes                          from "./routes/taskRoutes.js";
 import notificationRoutes                  from "./routes/notificationRoutes.js";
@@ -37,7 +38,7 @@ import { errorStatus } from "./services/accessRules.js";
 import { createPerfLog }                      from "./controllers/perfLogController.js";
 import { submitSurvey }                       from "./controllers/surveyController.js";
 import emitter                             from "./utils/emitter.js";
-import { registerGamificationListeners, updateDailyStreaks } from "./services/gamificationService.js";
+import { registerGamificationListeners, updateDailyStreaks, judgeDailyStreaks } from "./services/gamificationService.js";
 import { registerDesignHandoff } from "./services/designHandoff.js"; // E-3b (D-185)
 import GamificationProfile from "./models/GamificationProfile.js";
 import Task                from "./models/Task.js";
@@ -315,6 +316,7 @@ app.get("/api/health", (_req, res) => res.json(healthBody(mongoose.connection.re
 
 app.use("/api/auth",          authRoutes);
 app.use("/api/org",           orgRoutes);
+app.use("/api/director",      directorProjectsRoutes); // UI-B: read-only project + module pages
 app.use("/api/director",      directorRoutes);
 app.use("/api/manager",       managerRoutes);
 app.use("/api/tasks",         taskRoutes);
@@ -360,8 +362,12 @@ async function start() {
   registerGamificationListeners(emitter);
   registerDesignHandoff(emitter); // E-3b: approved design → linked developer tasks (no XP)
 
-  // Daily cron at midnight: update streaks + HP regen + monthly XP reset
-  cron.schedule("0 0 * * *", async () => {
+  // RND-19: every hour at :05. Each org's days are judged once ITS local clock is past 00:05 (its own timezone and
+  // working days); lastJudgedDate makes it idempotent and repairs a missed run.
+  cron.schedule("5 * * * *", () => judgeDailyStreaks().catch((e) => console.error("[streak-judge]", e.message)));
+
+  // Daily cron at 00:05 UTC: collab streak + HP regen + monthly XP reset
+  cron.schedule("5 0 * * *", async () => {
     try {
       await updateDailyStreaks();
 

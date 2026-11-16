@@ -22,7 +22,7 @@ const OPEN = { $ne: "Done" };
 const LEADERS = ["Director", "Manager"];
 
 export async function orgScope(orgId) {
-  const org = await Organization.findOne(IS_OID.test(orgId) ? { _id: orgId } : { orgId }, "_id orgId extensionRules workingTime workloadThresholdPct").lean();
+  const org = await Organization.findOne(IS_OID.test(orgId) ? { _id: orgId } : { orgId }, "_id orgId extensionRules workingTime workloadThresholdPct alertSettings").lean();
   if (!org) return null;
   const ids = [String(org._id), ...(org.orgId ? [org.orgId] : [])];
   return { org, filter: { orgId: { $in: ids } } };

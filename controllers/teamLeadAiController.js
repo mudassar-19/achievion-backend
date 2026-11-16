@@ -13,7 +13,7 @@ import AICache from "../models/AICache.js";
 import { getPrompt } from "../ai/prompts/registry.js";
 import { callChain, aiConfigured } from "../services/aiChain.js";
 import { parseJsonLoose } from "../services/aiEvalRules.js";
-import { makeRefs, dailyLimit, usageState, dayKey, cacheKey, prune, withNames, validateChat, validateScope } from "../services/managerAiRules.js";
+import { makeRefs, dailyLimit, usageState, dayKey, cacheKey, prune, withNames, hidePeople, validateChat, validateScope } from "../services/managerAiRules.js";
 import { tlContextFromPath, resolveTlContext, TL_PROMPTS_FOR, tlSourcesFor, tlProactiveCards, tlTaskForAi, validateTlInsight, validateAssignHint, validateRealismExplain, FEATURE_PREFIX } from "../services/tlAiRules.js";
 import { ROLE_TASK_ELIGIBILITY, ROLE_TO_CATEGORY } from "../services/workloadService.js";
 import { capture, passOn } from "../utils/capture.js";
@@ -51,7 +51,7 @@ function aiFail(res, err, usage) {
 async function ask(req, { feature, promptId, data, check }) {
   const prompt = getPrompt(promptId);
   const r = await callChain({ feature, orgId: req.user.orgId, requestedBy: req.user.id, promptId: prompt.id, promptVersion: prompt.version, systemPrompt: prompt.system,
-    temperature: prompt.temperature, maxTokens: prompt.maxTokens, maxInvalid: 2, userMessage: prompt.userTemplate(data), validate: (t) => check(parseJsonLoose(t)).ok });
+    temperature: prompt.temperature, maxTokens: prompt.maxTokens, maxInvalid: 2, userMessage: prompt.userTemplate(hidePeople(data)), validate: (t) => check(parseJsonLoose(t)).ok });
   const v = check(parseJsonLoose(r.text));
   if (!v.ok) throw Object.assign(new Error("invalid"), { status: 422 });
   return { value: v.value, fromCache: !!r.fromCache };

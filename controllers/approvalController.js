@@ -5,7 +5,7 @@ import * as approvalSvc from "../services/approvalService.js";
 import mongoose          from "mongoose";
 
 // Strip hashed credentials from approval payload before sending to client (ISS-022).
-function sanitizeApproval(doc) {
+export function sanitizeApproval(doc) {
   const a = doc.toObject ? doc.toObject() : { ...doc };
   if (a.payload) {
     const { password, passwordHash, resetCodeHash, ...rest } = a.payload;

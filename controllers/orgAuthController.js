@@ -197,7 +197,7 @@ export async function setupDirector(req, res) {
       { _id: org._id },
       {
         $addToSet:           { members: director._id },
-        $set:                { directorSetupComplete: true },
+        $set:                { directorSetupComplete: true, escalationContactId: director._id }, // H1a: never empty; the Director until someone else is chosen
       },
       { session }
     );

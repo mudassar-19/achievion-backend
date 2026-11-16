@@ -5,9 +5,12 @@ import Task               from "../models/Task.js";
 import User               from "../models/User.js";
 import Organization       from "../models/Organization.js";
 import AuditLog           from "../models/AuditLog.js";
-import { calculateTaskXP, levelFromTotalXp, crossedBurnout, lateAtSubmission, streakWindow, HP_BURNOUT, xpIncrement } from "./xpEngine.js";
+import { calculateTaskXP, levelFromTotalXp, crossedBurnout, lateAtSubmission, xpIncrement } from "./xpEngine.js";
 import { getIo }          from "../utils/io.js";
 import { reversalPlan }   from "./anomalyRules.js";
+import { orgWorkTime }    from "./workloadRules.js";
+import { orgAlertSettings } from "./alertRules.js";
+import { streakDayInfo, lastJudgeableDate, judgeProfileStreak, localDayBoundsUTC } from "./streakService.js";
 
 const IS_OBJECT_ID = /^[0-9a-f]{24}$/i;
 
@@ -36,8 +39,7 @@ export const XP_CONFIG = {
     1: 0.70,
   },
 
-  STREAK_XP_PER_DAY: 5,
-  STREAK_XP_CAP:     50,
+  // RND-14: STREAK_XP_PER_DAY and STREAK_XP_CAP removed (unused since streak became a multiplier, not additive)
 
   FIRST_LATE_WARNING:  true,
   LATE_XP_PENALTY_PCT: 0.15,
@@ -72,6 +74,7 @@ export const BADGE_ID_ALIASES = {
 // IDs are stable — stored in GamificationProfile.badges[].id. Names are display-only (may drift).
 export const BADGE_DEFINITIONS = [
   // ── Streak ───────────────────────────────────────────────────────────────────
+  // RND-14: consistency_starter is fixed at 5 (not in orgRules.badgeThresholds); excluded from monotonic rule
   { id: "consistency_starter", name: "Consistency Starter", type: "streak",  rarity: "common",
     description: "Maintain a 5-day daily streak",         goldReward: 15,
     condition: (p) => (p.streaks?.daily ?? 0) >= 5 },
@@ -81,6 +84,7 @@ export const BADGE_DEFINITIONS = [
   { id: "unstoppable",  name: "Unstoppable",   type: "streak",  rarity: "epic",
     description: "Maintain a streak for streak30 days",  goldReward: 100,
     condition: (p, t) => (p.streaks?.daily ?? 0) >= (t?.streak30 ?? 30) },
+  // RND-14: the_legend is fixed at 100 (not in orgRules.badgeThresholds); excluded from monotonic rule
   { id: "the_legend",   name: "The Legend",    type: "streak",  rarity: "legendary",
     description: "Maintain a 100-day streak",            goldReward: 500,
     condition: (p) => (p.streaks?.daily ?? 0) >= 100 },
@@ -187,9 +191,10 @@ async function _notify(userId, orgId, message, type = "system") {
 
 // 1.11e: when HP drops below HP_BURNOUT, tell the employee (burnout_risk) and their leads (burnout_alert). Once per crossing.
 export async function notifyBurnout(userId, orgId, prevHp, nextHp) {
-  if (!crossedBurnout(prevHp, nextHp)) return;
+  const { hpThresholdPct } = await orgAlertSettings(orgId); // H1a: Director Settings > Alerts, default 30
+  if (!crossedBurnout(prevHp, nextHp, hpThresholdPct)) return;
   await _notify(userId, orgId,
-    `Your HP is ${nextHp}/100 (below ${HP_BURNOUT}). Take a breather, and talk to your Team Lead if your workload is too high.`,
+    `Your HP is ${nextHp}/100 (below ${hpThresholdPct}). Take a breather, and talk to your Team Lead if your workload is too high.`,
     "burnout_risk");
   const [leads, me] = await Promise.all([
     User.find({ orgId, role: { $in: ["Manager", "Team Lead", "Director"] }, status: "active" }).select("_id").lean(),
@@ -650,69 +655,95 @@ async function applyTaskRejected({ taskId, orgId, reason }) {
 
 // ── Inline streak increment (UC-12) ─────────────────────────────────────────
 // Called at task approval time. Idempotent via lastStreakDate: a user who already
-// had a task approved today won't get a second increment.
+// had a task approved today (the ORG's calendar day, in the org timezone) won't get a second increment.
+// RND-19: only an org working day is a streak day; an off-day approval still pays XP but adds no streak day.
 export async function inlineStreakIncrement(userIds, orgId, now = new Date()) {
-  const today = new Date(now); today.setHours(0, 0, 0, 0);
+  const id  = String(orgId);
+  const org = await Organization.findOne(IS_OBJECT_ID.test(id) ? { _id: id } : { orgId: id }, "workingTime").lean();
+  const wt  = orgWorkTime(org);
+  const day = streakDayInfo(now, { workingDays: wt.workingDays, timezone: wt.timezone });
+  if (!day.isWorkingDay) return { modifiedCount: 0 };
   const ids = Array.isArray(userIds) ? userIds : [userIds];
   return GamificationProfile.updateMany(
     { userId: { $in: ids }, orgId,
-      $or: [{ lastStreakDate: null }, { lastStreakDate: { $lt: today } }] },
-    { $inc: { "streaks.daily": 1 }, $set: { lastStreakDate: today } }
+      $or: [{ lastStreakDate: null }, { lastStreakDate: { $lt: day.dayStart } }] },
+    { $inc: { "streaks.daily": 1 }, $set: { lastStreakDate: day.dayStart } }
   );
 }
 
-// ── Daily streak cron ─────────────────────────────────────────────────────────
-// Streak only counts Mon–Fri. On weekends the cron still runs HP regen but
-// does NOT break or advance streaks — working-day inactivity required to reset.
-export async function updateDailyStreaks(now = new Date()) {
-  // 1.11b: judge the working day that just ended (cron fires at 00:00).
-  const { start, end, isWorkingDay } = streakWindow(now);
+// ── Daily streak judging (RND-19) ─────────────────────────────────────────────
+// Runs every hour (server.js): an org's days are judged once ITS local clock is past 00:05, in its timezone, on its
+// working days. Idempotent catch-up via lastJudgedDate, so a missed run is repaired by the next one.
+// ponytail: scans every profile each hour; add a per-org "judged through" marker if profile counts grow large.
+export async function judgeDailyStreaks(now = new Date()) {
+  const allOrgIds = await GamificationProfile.distinct("orgId"); // includes orgs that only exist in tests
+  const orgDocs   = await Organization.find({ _id: { $in: allOrgIds } }, "workingTime").lean();
+  const orgMap    = new Map(orgDocs.map((o) => [String(o._id), o]));
 
-  if (isWorkingDay) {
-    const activeUserIds = await Task.distinct("assignees", {
-      status:      "Done",
-      completedAt: { $gte: start, $lt: end },
-    });
+  for (const orgId of allOrgIds) {
+    const { workingDays, timezone } = orgWorkTime(orgMap.get(String(orgId)));
+    const throughDate = lastJudgeableDate(now, timezone);
 
-    if (activeUserIds.length > 0) {
-      // collab streak still incremented by cron; daily streak is now incremented inline on approval
-      await GamificationProfile.updateMany(
-        { userId: { $in: activeUserIds } },
-        { $inc: { "streaks.collab": 1 } }
-      );
-    }
-
-    // Only reset streak if inactive on a working day (D-245: streak freeze protects one miss)
-    const inactiveProfiles = await GamificationProfile.find(
-      { userId: { $nin: activeUserIds }, "streaks.daily": { $gt: 0 } },
-      "userId orgId"
+    const profiles = await GamificationProfile.find(
+      { orgId },
+      "userId orgId streaks freezeCount previousDaily longestDaily lastJudgedDate"
     ).lean();
 
-    const frozenIds = new Set();
-    await Promise.allSettled(inactiveProfiles.map(async (p) => {
-      const protected_ = await applyStreakFreeze(p.userId, p.orgId);
-      if (protected_) frozenIds.add(String(p.userId));
-    }));
+    for (const profile of profiles) {
+      const r = await judgeProfileStreak(profile, {
+        workingDays, timezone, throughDate,
+        hadTask: async (dayStr) => {
+          const { start, end } = localDayBoundsUTC(dayStr, timezone);
+          return !!(await Task.exists({ status: "Done", completedAt: { $gte: start, $lt: end }, assignees: profile.userId }));
+        },
+      });
+      if (!r) continue;
 
-    const toReset = inactiveProfiles.map(p => p.userId).filter(id => !frozenIds.has(String(id)));
-    if (toReset.length > 0) {
-      await GamificationProfile.updateMany(
-        { userId: { $in: toReset } },
-        { $set: { "streaks.daily": 0 } }
+      await GamificationProfile.updateOne(
+        { _id: profile._id },
+        { $set: {
+          "streaks.daily": r.streak,
+          previousDaily:   r.previousDaily,
+          longestDaily:    r.longestDaily,
+          freezeCount:     r.freezeCount,
+          lastJudgedDate:  r.lastJudgedDate,
+        }}
       );
+
+      if (r.usedFreeze) {
+        _notify(profile.userId, profile.orgId, "Your Streak Freeze protected today's streak! 🧊", "streak_freeze").catch(() => {});
+      }
     }
   }
-  // Weekend: no streak change at all (no increment, no reset)
+}
 
-  // HP daily regen always runs regardless of day
+// ── Once-a-day job: collab streak + HP regen + quest sweep, plus the daily-streak judging ─────────────────────
+// Collab streak still uses global yesterday UTC window (pre-existing, out of scope).
+export async function updateDailyStreaks(now = new Date()) {
+  // ── Collab streak: global, yesterday UTC window ──────────────────────────
+  const yEnd   = new Date(now); yEnd.setUTCHours(0, 0, 0, 0);
+  const yStart = new Date(yEnd.getTime() - 86_400_000);
+  const globalActiveIds = await Task.distinct("assignees", {
+    status: "Done", completedAt: { $gte: yStart, $lt: yEnd },
+  });
+  if (globalActiveIds.length > 0) {
+    await GamificationProfile.updateMany(
+      { userId: { $in: globalActiveIds } },
+      { $inc: { "streaks.collab": 1 } }
+    );
+  }
+
+  // Daily streak (per-org timezone, catch-up): the hourly job does this too; running it here keeps one place to call.
+  await judgeDailyStreaks(now);
+
+  // HP daily regen — always runs
   await GamificationProfile.updateMany(
     {},
     [{ $set: { hp: { $min: [XP_CONFIG.HP_MAX, { $add: ["$hp", XP_CONFIG.HP_DAILY_REGEN] }] } } }],
     { updatePipeline: true }
   );
 
-  console.log(`[Gamification] Daily streaks updated. Working day: ${isWorkingDay}`);
-  // M-5: streak challenges, expiry and repeats.
+  console.log("[Gamification] Daily streaks updated (per-org timezone, catch-up enabled)");
   import("./questService.js").then((m) => m.sweepQuests()).catch((e) => console.error("[Gamification] quest sweep:", e.message));
 }
 

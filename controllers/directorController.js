@@ -493,10 +493,10 @@ export async function getProjects(req, res) {
 
   const projectIds    = projects.map((p) => p._id);
   const completionAgg = await Task.aggregate([
-    { $match: { project: { $in: projectIds } } },
+    { $match: { projectId: { $in: projectIds } } }, // UI-B: was `project`, a field Task does not have (completion was always 0)
     {
       $group: {
-        _id:   "$project",
+        _id:   "$projectId",
         total: { $sum: 1 },
         done:  { $sum: { $cond: [{ $eq: ["$status", "Done"] }, 1, 0] } },
       },
@@ -627,6 +627,7 @@ export async function getAuditLog(req, res) {
   const mapped = logs.map((l) => ({
     id:            l._id,
     action:        l.action,
+    targetUserId:  l.targetUserId?._id       ?? null,
     targetName:    l.targetUserId?.name      ?? null,
     targetRole:    l.targetUserId?.role      ?? null,
     avatarSeed:    l.targetUserId?.avatarSeed ?? l.targetUserId?.name ?? null,
@@ -679,14 +680,15 @@ function orgFilter(orgId) {
   return IS_OBJECT_ID.test(orgId ?? "") ? { _id: orgId } : { orgId };
 }
 
+// RND-12: all type multipliers default 1.0 for new orgs. Existing orgs keep stored values.
 const DEFAULT_GAMIFICATION_RULES = {
   xpMultipliers: {
     Feature:       1.0,
-    Bug:           0.8,
-    Design:        0.9,
-    Testing:       0.7,
-    DevOps:        0.9,
-    Documentation: 0.5,
+    Bug:           1.0,
+    Design:        1.0,
+    Testing:       1.0,
+    DevOps:        1.0,
+    Documentation: 1.0,
   },
   streakBonus:      1.1,
   badgeThresholds:  { firstTask: 1, tenTasks: 10, streak7: 7, streak30: 30 },
@@ -723,21 +725,53 @@ export async function updateWorkspaceSettings(req, res) {
   const changedFields = [];
   if (name?.trim())                                                { update.name             = name.trim();    changedFields.push("name"); }
   if (companySize)                                                 { update.companySize       = companySize;   changedFields.push("companySize"); }
+  // RND-17: capture before state (also the base for a partial patch)
+  const beforeOrg = gamificationRules && typeof gamificationRules === "object"
+    ? await Organization.findOne(orgFilter(orgId), "gamificationRules").lean()
+    : null;
+
   if (gamificationRules && typeof gamificationRules === "object") {
-    // Validate badgeThresholds when provided
-    const bt = gamificationRules.badgeThresholds;
-    if (bt !== undefined) {
-      const RANGES = { firstTask: [1, 10], tenTasks: [1, 50], streak7: [3, 30], streak30: [7, 90] };
-      for (const [key, [min, max]] of Object.entries(RANGES)) {
-        if (bt[key] !== undefined) {
-          const v = Number(bt[key]);
-          if (!Number.isInteger(v) || v < min || v > max)
-            return res.status(400).json({ error: `badgeThresholds.${key} must be an integer between ${min} and ${max}.` });
-          bt[key] = v;
-        }
-      }
+    // RND-17 (+G1c): validate each part that was sent, merge with stored rules so a partial patch keeps the rest.
+    const { xpMultipliers, streakBonus, badgeThresholds: bt } = gamificationRules;
+    const stored = beforeOrg?.gamificationRules ?? {};
+    const mult = {};
+    for (const [type, raw] of Object.entries(xpMultipliers && typeof xpMultipliers === "object" ? xpMultipliers : {})) {
+      const v = Number(raw);
+      if (!Number.isFinite(v) || v < 0.5 || v > 2.0)
+        return res.status(400).json({ error: `xpMultipliers.${type} must be between 0.5 and 2.0.` });
+      if (Math.round(v * 10) / 10 !== v)
+        return res.status(400).json({ error: `xpMultipliers.${type} must be a multiple of 0.1.` });
+      mult[type] = v;
     }
-    update.gamificationRules = gamificationRules; changedFields.push("gamificationRules");
+
+    let streak = stored.streakBonus ?? DEFAULT_GAMIFICATION_RULES.streakBonus;
+    if (streakBonus !== undefined) {
+      streak = Number(streakBonus);
+      if (!Number.isFinite(streak) || streak < 1.0 || streak > 1.5)
+        return res.status(400).json({ error: "streakBonus must be between 1.0 and 1.5." });
+    }
+
+    const thr = {};
+    const RANGES = { firstTask: [1, 1], tenTasks: [5, 50], streak7: [3, 14], streak30: [15, 60] };
+    for (const [key, [min, max]] of Object.entries(RANGES)) {
+      if (bt?.[key] === undefined) continue;
+      const v = Number(bt[key]);
+      if (!Number.isInteger(v) || v < min || v > max)
+        return res.status(400).json({ error: `badgeThresholds.${key} must be an integer between ${min} and ${max}.` });
+      thr[key] = v;
+    }
+    const mergedThr = { ...DEFAULT_GAMIFICATION_RULES.badgeThresholds, ...(stored.badgeThresholds ?? {}), ...thr };
+    // G1c: only task counts (first < ten) and streak days (7 < 30) are ordered; counts and days are never compared.
+    if (mergedThr.firstTask >= mergedThr.tenTasks) return res.status(400).json({ error: "badgeThresholds.firstTask must be less than tenTasks." });
+    if (mergedThr.streak7 >= mergedThr.streak30)   return res.status(400).json({ error: "badgeThresholds.streak7 must be less than streak30." });
+
+    update.gamificationRules = {
+      ...stored, ...gamificationRules,
+      xpMultipliers:   { ...DEFAULT_GAMIFICATION_RULES.xpMultipliers, ...(stored.xpMultipliers ?? {}), ...mult },
+      streakBonus:     streak,
+      badgeThresholds: mergedThr,
+    };
+    changedFields.push("gamificationRules");
   }
 
   if (Object.keys(update).length === 0) return res.status(400).json({ error: "Nothing to update." });
@@ -754,6 +788,10 @@ export async function updateWorkspaceSettings(req, res) {
     orgId:       org._id,
     performedBy: directorId,
     detail:      `Workspace settings updated: ${changedFields.join(", ")}.`,
+    ...(gamificationRules && {
+      before: { gamificationRules: beforeOrg?.gamificationRules ?? DEFAULT_GAMIFICATION_RULES },
+      after:  { gamificationRules: org.gamificationRules ?? DEFAULT_GAMIFICATION_RULES },
+    }),
   }).catch(() => {});
 
   res.json({
@@ -817,14 +855,71 @@ export async function adjustXp(req, res) {
   }
 }
 
-// ── POST /api/director/reset-gamification ─────────────────────────────────────
-// Blocked: Danger Zone UI removed; re-enable only after owner approval +
-// maker-checker second-Director confirm. When re-enabled, GAMIFICATION_RESET
-// must be logged to AuditLog with orgId, performedBy, and confirmedBy fields.
-export async function resetGamification(_req, res) {
-  return res.status(403).json({
-    error: "Gamification reset is disabled. Requires owner approval and maker-checker confirmation.",
+// ── POST /api/director/gamification/preview (RND-16) ─────────────────────────
+// Read-only: compare current vs proposed XP calculation. No DB writes.
+export async function previewGamification(req, res) {
+  const { orgId } = req.user;
+  const { taskType = "Feature", baseXP = 50, proposedMultipliers, proposedStreakBonus } = req.body;
+
+  if (proposedStreakBonus !== undefined) {
+    const v = Number(proposedStreakBonus);
+    if (!Number.isFinite(v) || v < 1.0 || v > 1.5)
+      return res.status(400).json({ error: "proposedStreakBonus must be between 1.0 and 1.5." });
+  }
+
+  const org = await Organization.findOne(orgFilter(orgId), "gamificationRules").lean();
+  const rules = org?.gamificationRules ?? DEFAULT_GAMIFICATION_RULES;
+
+  const { calculateTaskXP } = await import("../services/xpEngine.js");
+  const sampleTask = { type: taskType, xpValue: baseXP, priority: "Medium" };
+
+  const proposed = {
+    ...rules,
+    ...(proposedMultipliers ? { xpMultipliers: { ...(rules.xpMultipliers ?? {}), ...proposedMultipliers } } : {}),
+    ...(proposedStreakBonus !== undefined ? { streakBonus: Number(proposedStreakBonus) } : {}),
+  };
+  const xp = (orgRules, streakDays = 0) => calculateTaskXP({ task: sampleTask, orgRules, streakDays }).finalXP;
+  const currentStreak = Number(rules.streakBonus ?? DEFAULT_GAMIFICATION_RULES.streakBonus);
+
+  res.json({
+    currentXP: xp(rules), previewXP: xp(proposed),
+    streakBonus: { current: currentStreak, proposed: Number(proposed.streakBonus ?? currentStreak) },
+    streakXP: { current: xp(rules, 1), preview: xp(proposed, 1) },
+    sampleTask: { type: taskType, baseXP },
   });
+}
+
+// ── POST /api/director/gamification/restore-defaults (RND-12) ─────────────────
+export async function restoreGamificationDefaults(req, res) {
+  const { orgId, id: directorId } = req.user;
+  const { confirm, reason } = req.body;
+  if (!confirm) return res.status(400).json({ error: "confirm: true is required." });
+  if (!reason?.trim()) return res.status(400).json({ error: "reason is required." });
+
+  const beforeOrg = await Organization.findOne(orgFilter(orgId), "gamificationRules").lean();
+  const org = await Organization.findOneAndUpdate(
+    orgFilter(orgId),
+    { $set: { gamificationRules: DEFAULT_GAMIFICATION_RULES } },
+    { returnDocument: "after" }
+  ).lean();
+  if (!org) return res.status(404).json({ error: "Organization not found." });
+
+  await AuditLog.create({
+    action:      "gamification_defaults_restored",
+    orgId:       org._id,
+    performedBy: directorId,
+    detail:      `Gamification rules restored to defaults. Reason: ${reason.trim()}`,
+    before:      { gamificationRules: beforeOrg?.gamificationRules ?? null },
+    after:       { gamificationRules: DEFAULT_GAMIFICATION_RULES },
+  }).catch(() => {});
+
+  res.json({ ok: true, gamificationRules: DEFAULT_GAMIFICATION_RULES });
+}
+
+// ── POST /api/director/reset-gamification (deprecated — removed) ──────────────
+// RND-12: replaced by /gamification/restore-defaults. Kept as 404 to avoid 500 on stale clients.
+export async function resetGamification(_req, res) {
+  return res.status(404).json({ error: "This endpoint has been removed. Use POST /api/director/gamification/restore-defaults." });
 }
 
 // ── GET /api/director/workspace-members ───────────────────────────────────────

@@ -683,7 +683,7 @@ export async function getMilestoneDetail(req, res) {
   const due      = milestone.dueDate   ?? null;
   const workTime = await loadOrgWorkTime(orgId); // 4.2a: org Working Time, not a hard-coded 7 h / Mon-Fri
   const DAILY_H  = workTime.hoursPerDay;
-  const workingDays    = (start && due) ? countWorkingDays(new Date(start), new Date(due), workTime.workingDays) : 0;
+  const workingDays    = (start && due) ? countWorkingDays(new Date(start), new Date(due), workTime.workingDays, workTime.timezone) : 0;
   // workDone = sum of estimatedHours of completed tasks only
   const workDone       = tasks
     .filter((t) => t.status === "Done")

@@ -7,6 +7,7 @@ import Approval          from "../models/Approval.js";
 import Notification      from "../models/Notification.js";
 import Task              from "../models/Task.js";
 import * as approvalSvc  from "../services/approvalService.js";
+import { sanitizeApproval } from "./approvalController.js";
 import { validateSuspendReason } from "../services/orgAdminRules.js";
 
 // ── Role promotion helper ─────────────────────────────────────────────────────
@@ -142,7 +143,7 @@ export async function createEmployee(req, res) {
 
   // If a custom label is provided, it must match an active custom role in this org
   if (roleLabel != null) {
-    const match = (org.customRoles ?? []).find((r) => r.active && r.label === roleLabel);
+    const match = (org.customRoles ?? []).find((r) => r?.active && r.label === roleLabel);
     if (!match) return clientError(res, 400, `roleLabel "${roleLabel}" is not an active custom role in this organization.`);
   }
 
@@ -344,11 +345,13 @@ export async function listOrgApprovals(req, res) {
     filter.status = status.toUpperCase();
   }
 
+  // F-057: never select the initial-password hash, and strip it again from the response (same helper as the Director route).
   const approvals = await Approval.find(filter)
+    .select("-payload.password -payload.passwordHash -payload.resetCodeHash")
     .populate("targetEmployeeId", "name email role")
     .sort({ createdAt: -1 });
 
-  return res.json({ success: true, data: approvals });
+  return res.json({ success: true, data: approvals.map(sanitizeApproval) });
 }
 // ── GET /api/org/employees/:userId ────────────────────────────────────────────
 export async function getEmployee(req, res) {

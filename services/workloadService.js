@@ -112,7 +112,7 @@ function buildSnapshot(user, activeTasks, profile, workTime, opts = {}) {
   // Sum DAILY-distributed hours from active tasks (total hours ÷ task duration in working days)
   // This prevents a multi-day task from inflating a single day's utilisation.
   const allocatedHours = activeTasks.reduce(
-    (sum, t) => sum + dailyHoursForTask(t, now, workTime.workingDays),
+    (sum, t) => sum + dailyHoursForTask(t, now, workTime.workingDays, workTime.timezone),
     0
   );
 
@@ -134,6 +134,7 @@ function buildSnapshot(user, activeTasks, profile, workTime, opts = {}) {
     // Capacity
     dailyCapacityHours: stdHours,
     workingDays:        workTime.workingDays,
+    timezone:           workTime.timezone,
     allocatedHours:     Math.round(allocatedHours * 10) / 10,
     availableHours,
     utilisation,              // 0–100 %
@@ -217,7 +218,7 @@ export async function validateTaskAssignment({ assigneeId, estimatedHours, taskT
   let   dailyContrib = totalHours;
   let   taskWorkingDays = 1;
   if (deadline) {
-    taskWorkingDays = Math.max(1, countWorkingDays(new Date(), new Date(deadline), snapshot.workingDays));
+    taskWorkingDays = Math.max(1, countWorkingDays(new Date(), new Date(deadline), snapshot.workingDays, snapshot.timezone));
     dailyContrib    = totalHours / taskWorkingDays;
   }
 
@@ -276,7 +277,7 @@ export async function validateMilestoneCapacity({ milestoneId, memberIds, startD
 
   // Working days between dates (Mon–Fri only)
   const workTime    = await loadOrgWorkTime(orgId);
-  const workingDays = countWorkingDays(startDate ? new Date(startDate) : new Date(), new Date(dueDate), workTime.workingDays);
+  const workingDays = countWorkingDays(startDate ? new Date(startDate) : new Date(), new Date(dueDate), workTime.workingDays, workTime.timezone);
 
   // Get all tasks in this milestone that have estimated hours
   const milestoneTasks = milestoneId

@@ -249,7 +249,7 @@ export async function getLeaderboard(req, res) {
   if (people) userFilter._id = { $in: [...people] };
   const users = (await User.find(userFilter, "_id name role roleLabel avatarSeed").lean()).filter((u) => isRankable(u.role));
   const userIds = users.map((u) => u._id);
-  const profiles = new Map((await GamificationProfile.find({ userId: { $in: userIds } }, "userId level totalXp monthlyXp streaks stats avatarStyle avatarSeed shopEquipped").lean()).map((p) => [String(p.userId), p]));
+  const profiles = new Map((await GamificationProfile.find({ userId: { $in: userIds } }, "userId level totalXp monthlyXp streaks stats avatarStyle avatarSeed shopEquipped previousDaily longestDaily").lean()).map((p) => [String(p.userId), p]));
 
   const weekAgo = new Date(Date.now() - 7 * 86_400_000);
   const monthStart = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
@@ -276,7 +276,7 @@ export async function getLeaderboard(req, res) {
     // Batch 3 (E4): public fields only, with the avatar the person equipped (else the default).
     return publicRow({ userId: uid, name: u.name ?? "—", role: u.role ?? "", roleLabel: u.roleLabel ?? null, avatarStyle: p.avatarStyle, avatarSeed: p.avatarSeed ?? null, level: p.level ?? 1,
       xp, rankXp: xp, totalXp, monthlyXp, weeklyXp, tasksCompleted, onTimePct, completionRate: onTimePct ?? 0,
-      streak: p.streaks?.daily ?? 0, isUser: uid === String(userId),
+      streak: p.streaks?.daily ?? 0, longestStreak: p.longestDaily ?? 0, previousStreak: p.previousDaily ?? 0, isUser: uid === String(userId),
       shopEquipped: p.shopEquipped instanceof Map ? Object.fromEntries(p.shopEquipped) : (p.shopEquipped ?? {}) });
   }).sort((a, b) => a.name.localeCompare(b.name));
 

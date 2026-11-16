@@ -5,6 +5,7 @@ import User         from "../models/User.js";
 import Notification from "../models/Notification.js";
 import { isMailConfigured, sendMail } from "../utils/mailer.js";
 import { getIo }    from "../utils/io.js";
+import { orgAlertSettings } from "./alertRules.js";
 
 export const OFFLINE_EMAIL_TYPES = new Set([
   "task_assigned",
@@ -13,8 +14,7 @@ export const OFFLINE_EMAIL_TYPES = new Set([
   "extension_decision",
 ]);
 
-const FIVE_MIN = 5 * 60 * 1000;
-const DAY_MS   = 24 * 60 * 60 * 1000;
+const DAY_MS  = 24 * 60 * 60 * 1000;
 
 // In-memory per-user daily count. Resets when the process restarts or at midnight (good enough — no DB needed).
 const dailyCounts = new Map(); // userId:dateStr → count
@@ -58,12 +58,13 @@ async function _send({ userId, type, title, message }) {
   if (!isOffline(userId)) return;
 
   // Fetch user (email, lastSeenAt, settings)
-  const user = await User.findById(userId, "email lastSeenAt settings").lean().catch(() => null);
+  const user = await User.findById(userId, "email lastSeenAt settings orgId").lean().catch(() => null);
   if (!user?.email) return;
 
-  // lastSeenAt > 5min check (null = never seen = offline)
+  // lastSeenAt older than the org's "email after inactivity" minutes (Settings > Alerts, default 5); null = never seen = offline
+  const { emailDelayMin } = await orgAlertSettings(user.orgId);
   const lastSeen = user.lastSeenAt ? new Date(user.lastSeenAt) : null;
-  if (lastSeen && Date.now() - lastSeen.getTime() < FIVE_MIN) return;
+  if (lastSeen && Date.now() - lastSeen.getTime() < emailDelayMin * 60_000) return;
 
   // User setting (default on)
   if (user.settings?.emailNotificationsEnabled === false) return;

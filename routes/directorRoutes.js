@@ -20,6 +20,8 @@ import {
   getWorkspaceMembers,
   updateMemberStatus,
   resetGamification,
+  previewGamification,
+  restoreGamificationDefaults,
   getXpByRole,
   getTaskStats,
   getSprintVelocity,
@@ -28,7 +30,6 @@ import {
 import {
   getSettings,
   updateSettings,
-  resetXpPools,
 } from "../controllers/directorSettingsController.js";
 import {
   listCustomRoles, addCustomRole, updateCustomRole, deactivateCustomRole, setUserRoleLabel,
@@ -74,6 +75,8 @@ router.get("/xp-distribution",                    getXpDistribution);
 router.get("/workspace-settings",                 getWorkspaceSettings);
 router.patch("/workspace-settings",               updateWorkspaceSettings);
 router.post("/reset-gamification",                resetGamification);
+router.post("/gamification/preview",              previewGamification);
+router.post("/gamification/restore-defaults",     restoreGamificationDefaults);
 router.get("/workspace-members",                  getWorkspaceMembers);
 router.patch("/workspace-members/:userId/status", updateMemberStatus);
 
@@ -84,7 +87,6 @@ router.get("/reports/sprint-velocity",             getSprintVelocity);
 // Settings — Slice 3a (replaces localStorage-only save)
 router.get("/settings",                           getSettings);
 router.patch("/settings",                         updateSettings);
-router.post("/settings/reset-xp-pools",           resetXpPools);
 
 // Custom roles — D-294 IMPL-5 Part 4
 router.get("/settings/custom-roles",              listCustomRoles);

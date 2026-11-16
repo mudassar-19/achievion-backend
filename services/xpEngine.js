@@ -85,8 +85,8 @@ export function streakWindow(now = new Date(), workingDays = [1, 2, 3, 4, 5]) {
 }
 
 // 1.11e: notify once, when HP drops below the threshold.
-export function crossedBurnout(prevHp, nextHp) {
-  return prevHp >= HP_BURNOUT && nextHp < HP_BURNOUT;
+export function crossedBurnout(prevHp, nextHp, threshold = HP_BURNOUT) {
+  return prevHp >= threshold && nextHp < threshold;
 }
 
 // ── Deadline jobs (V1 1.5, 1.6) ───────────────────────────────────────────────
@@ -94,10 +94,14 @@ export const DEADLINE_ALERT_HOURS = 24;
 export const MISSED_DEADLINE_HP   = 5;
 const OPEN = ["Backlog", "To-Do", "In-Progress"]; // not yet submitted
 
-export function deadlineAlertDue(task, now = new Date()) {
+// warnPct (H1a, org Alerts rule) null = the old fixed 24 h window; a number = fire once that % of the task's time (created -> deadline) has passed.
+export function deadlineAlertDue(task, now = new Date(), warnPct = null) {
   if (!task?.deadline || task.deadlineAlertSentAt || !OPEN.includes(task.status)) return false;
   const left = new Date(task.deadline) - now;
-  return left > 0 && left <= DEADLINE_ALERT_HOURS * 3_600_000;
+  if (left <= 0) return false;
+  if (warnPct == null) return left <= DEADLINE_ALERT_HOURS * 3_600_000;
+  const total = task.createdAt ? new Date(task.deadline) - new Date(task.createdAt) : 0;
+  return total > 0 && (now - new Date(task.createdAt)) * 100 >= warnPct * total;
 }
 
 export function missedDeadlinePenalty(task, now = new Date()) {

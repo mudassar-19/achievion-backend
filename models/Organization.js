@@ -101,8 +101,9 @@ const organizationSchema = new Schema(
 
     // ── Slice 3a settings fields ──────────────────────────────────────────────
     workingTime: {
-      hoursPerDay:  { type: Number, default: 7,       min: 1, max: 24 },
+      hoursPerDay:  { type: Number, default: 8,       min: 4, max: 12 }, // RND-26: 4–12 step 0.5
       workingDays:  { type: [Number], default: [1,2,3,4,5] }, // 0=Sun…6=Sat
+      timezone:     { type: String,  default: "Asia/Karachi" }, // RND-19: org timezone for streak cron
     },
 
     // M-4: Director default workload limit (% of daily capacity); above it a person is "Overloaded".
@@ -132,6 +133,9 @@ const organizationSchema = new Schema(
     },
 
     gamificationSettings: { type: Schema.Types.Mixed, default: null },
+
+    // H1a: span of the yearly recap. No default on purpose: older orgs kept it in gamificationSettings.fiscalYear, readers fall back to that, then "calendar".
+    fiscalYear: { type: String, enum: ["calendar", "july-june"] },
 
     escalationContactId: { type: Types.ObjectId, ref: "User", default: null },
 
