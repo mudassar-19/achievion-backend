@@ -164,7 +164,7 @@ export async function prepareSubmit(req, res, next) {
   const fields = { ...Object.fromEntries(["link", "branch", "summary", "tests", "version", "rationale", "handoff"].map((k) => [k, req.body?.[k]])), criteria, design };
   const v = validateSubmission({ kind: req.user.roleCategory, task: t, fields, files: (req.files ?? []).map((f) => ({ name: f.originalname, size: f.size })) });
   if (v.error) return res.status(400).json({ error: v.error, field: v.field });
-  req.body = { note: v.note, links: JSON.stringify(v.links), content: v.content, checklist: JSON.stringify(v.checklist), handoff: req.user.roleCategory === "designer" ? String(fields.handoff ?? "").trim() : "" };
+  req.body = { aiAssisted: req.body?.aiAssisted === "true", note: v.note, links: JSON.stringify(v.links), content: v.content, checklist: JSON.stringify(v.checklist), handoff: req.user.roleCategory === "designer" ? String(fields.handoff ?? "").trim() : "" };
   next();
 }
 

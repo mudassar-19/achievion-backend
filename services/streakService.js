@@ -52,9 +52,9 @@ function addDays(dateStr, n) {
 const weekdayOf = (dateStr) => new Date(`${dateStr}T00:00:00Z`).getUTCDay();
 
 // The org's calendar day that `now` falls on: its date, whether it is a working day, and when it started (UTC).
-export function streakDayInfo(now, { workingDays, timezone }) {
+export function streakDayInfo(now, { workingDays, timezone, holidays = [] }) {
   const dateStr = localDate(now, timezone);
-  return { dateStr, isWorkingDay: workingDays.includes(weekdayOf(dateStr)), dayStart: localDayBoundsUTC(dateStr, timezone).start };
+  return { dateStr, isWorkingDay: workingDays.includes(weekdayOf(dateStr)) && !holidays.includes(dateStr) /* F-001: a holiday is a day off */, dayStart: localDayBoundsUTC(dateStr, timezone).start };
 }
 
 // RND-19: the last day that may be judged. The org's local clock must be past 00:05; before that, the
@@ -64,10 +64,10 @@ export function lastJudgeableDate(now, timezone) {
 }
 
 // Working days (local "YYYY-MM-DD") strictly after fromStr, up to and including toStr.
-function workingDaysAfter(fromStr, toStr, workingDays) {
+function workingDaysAfter(fromStr, toStr, workingDays, holidays = []) {
   const result = [];
   for (let day = addDays(fromStr, 1); day <= toStr; day = addDays(day, 1)) {
-    if (workingDays.includes(weekdayOf(day))) result.push(day);
+    if (workingDays.includes(weekdayOf(day)) && !holidays.includes(day)) result.push(day);
   }
   return result;
 }
@@ -77,8 +77,8 @@ function workingDaysAfter(fromStr, toStr, workingDays) {
  * and up to and including `to` in the given timezone.
  * Returns an empty array if from >= to on the same local date.
  */
-export function getWorkingDaysInRange(from, to, { workingDays, timezone }) {
-  return workingDaysAfter(localDate(from, timezone), localDate(to, timezone), workingDays);
+export function getWorkingDaysInRange(from, to, { workingDays, timezone, holidays = [] }) {
+  return workingDaysAfter(localDate(from, timezone), localDate(to, timezone), workingDays, holidays);
 }
 
 /**
@@ -110,9 +110,9 @@ export function judgeStreakDay(profile, { hadTask, useFreeze }) {
  * "YYYY-MM-DD"). hadTask(dayStr) answers "approved task that day?". Idempotent: returns null when there is
  * nothing new to write; a cron that missed days catches all of them up in order. No HP is touched.
  */
-export async function judgeProfileStreak(profile, { workingDays, timezone, throughDate, hadTask }) {
+export async function judgeProfileStreak(profile, { workingDays, timezone, throughDate, hadTask, holidays = [] }) {
   const fromStr = profile.lastJudgedDate ? localDate(new Date(profile.lastJudgedDate), timezone) : addDays(throughDate, -1);
-  const days = workingDaysAfter(fromStr, throughDate, workingDays);
+  const days = workingDaysAfter(fromStr, throughDate, workingDays, holidays);
   if (!days.length && profile.lastJudgedDate) return null;
 
   let streak = profile.streaks?.daily ?? 0;

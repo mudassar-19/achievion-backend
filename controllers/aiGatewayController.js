@@ -7,6 +7,8 @@ import User             from "../models/User.js";
 import { dailyCapUsd } from "../services/aiCap.js";
 import { periodFor, recapCards, aiRecapSummary } from "../services/recapService.js";
 import { periodRange } from "../services/recapMetrics.js";
+import { citationUrl } from "../services/citationUrl.js";
+import { rebalanceBasis } from "../services/heatmapRules.js";
 
 const IS_OID = /^[0-9a-f]{24}$/i;
 
@@ -53,6 +55,9 @@ export async function suggestRebalance(req, res) {
   if (!requireDirector(req, res)) return;
   const { orgId, id: userId } = req.user;
   const { data } = req.body;
+  // QA2-20: ask the AI only when a team is over capacity and another has room; the AI sees names and loads, nothing else.
+  const basis = rebalanceBasis(data);
+  if (!basis.ok) return res.json({ suggestion: null, reason: basis.reason, aiGenerated: false });
 
   try {
     const prompt = getPrompt("rebalance-suggestion");
@@ -60,7 +65,7 @@ export async function suggestRebalance(req, res) {
       feature: "rebalance", orgId, requestedBy: userId,
       promptId: prompt.id, promptVersion: prompt.version,
       systemPrompt: prompt.system,
-      userMessage:  prompt.userTemplate(data ?? {}),
+      userMessage:  prompt.userTemplate({ teams: basis.teams }),
       validate: prompt.validate,
     });
     res.json({ suggestion: result.text, aiGenerated: true });
@@ -156,23 +161,21 @@ export async function askAchievion(req, res) {
 
   try {
     // Lazy import ragStore (initialises embedder on first call)
-    const { query: ragQuery, indexSize, reindexOrg } = await import("../services/rag/ragStore.js");
+    const { query: ragQuery, indexSize, ensureIndexFresh, hasEnoughData } = await import("../services/rag/ragStore.js");
 
-    // Reindex if empty
-    if (indexSize(orgId) === 0) {
-      const { default: mongoose } = await import("mongoose");
-      await reindexOrg(orgId, mongoose).catch(() => {});
-    }
+    // QA2-66: build the index on the first question and rebuild it when a project or task changed since (no manual "reindex")
+    const { default: mongoose } = await import("mongoose");
+    await ensureIndexFresh(orgId, mongoose).catch(() => {});
 
-    // "Not enough data" guard: fewer than 5 indexed docs → safe empty response
-    if (indexSize(orgId) < 5) {
-      return res.json({ answer: "Not enough data to answer.", citations: [], aiGenerated: false, notEnoughData: true });
+    // "Not enough data" guard: nothing indexed at all (an empty organisation) → safe empty response
+    if (!hasEnoughData(indexSize(orgId))) {
+      return res.json({ answer: "Nothing has been added to this organisation yet, so there is nothing to answer from.", citations: [], aiGenerated: false, notEnoughData: true });
     }
 
     const hits = await ragQuery(question, { orgId, role, topK: 5 });
     // ponytail: truncate each hit to 300 chars — keeps context under ~1500 tokens total
     const context = hits.map((h, i) => `[${i + 1}] ${h.text.slice(0, 300)}`).join("\n").slice(0, 2000);
-    const citations = hits.map((h) => ({ source: h.source, ref: h.ref, text: h.text.slice(0, 80) }));
+    const citations = hits.map((h) => ({ source: h.source, ref: h.ref, text: h.text.slice(0, 80), url: citationUrl(h.source, h.ref) }));
 
     // Build history string for the prompt
     const historyStr = history.length

@@ -8,11 +8,12 @@ export const TIGHT_PCT = 85;                  // above this share of the free ho
 
 const startOfDay = (d) => { const x = new Date(d); x.setHours(0, 0, 0, 0); return x; };
 // Working days from today to the deadline, both included; 0 when the deadline has passed (D-017).
-export function workingDaysUntil(today, deadline, workingDays) {
+export function workingDaysUntil(today, deadline, workingDays, holidays = []) {
   const s = startOfDay(today), e = startOfDay(deadline);
   if (e < s) return 0;
   let n = 0;
-  for (const d = new Date(s); d <= e; d.setDate(d.getDate() + 1)) if (workingDays.includes(d.getDay())) n++;
+  const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  for (const d = new Date(s); d <= e; d.setDate(d.getDate() + 1)) if (workingDays.includes(d.getDay()) && !holidays.includes(ymd(d))) n++; // F-001
   return n;
 }
 
@@ -35,7 +36,7 @@ export function realismCheck({ rows = [], team = [], workTime, today = new Date(
   if (!rows.some((r) => r.type === "Testing" || r.qaRequired)) issues.push({ level: "warning", code: "qa_missing", message: "No testing task and no task marked QA required. Who checks the work?" });
 
   const taskHours = round(rows.reduce((s, r) => s + (Number(r.hours) > 0 ? Number(r.hours) : 0), 0));
-  const days = deadline ? workingDaysUntil(today, deadline, workTime.workingDays) : 0;
+  const days = deadline ? workingDaysUntil(today, deadline, workTime.workingDays, workTime.holidays ?? []) : 0;
   const capacityHours = round(team.reduce((s, m) => s + (m.capacityPerDay ?? workTime.hoursPerDay) * days, 0));
   const existingHours = round(team.reduce((s, m) => s + Math.min(m.allocatedPerDay ?? 0, m.capacityPerDay ?? workTime.hoursPerDay) * days, 0));
   const freeHours = round(Math.max(0, capacityHours - existingHours));

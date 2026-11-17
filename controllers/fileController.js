@@ -2,11 +2,21 @@
 import Task from "../models/Task.js";
 import Project from "../models/Project.js";
 import Bug from "../models/Bug.js";
+import ChatMessage from "../models/ChatMessage.js";
+import ChatChannel from "../models/ChatChannel.js";
+import * as R from "../services/chatRules.js";
 import { orgScope } from "./managerProjectsController.js";
 import { fileStore } from "../middleware/upload.js";
 import { mayOpenAny, isSafeUploadPath, signFilePath, verifyFileLink, parseCloudinaryUrl } from "../services/accessRules.js";
 
 const NOT_FOUND = { error: "File not found." };
+
+// F-018: a file sent in chat opens for the people who may see that conversation (same rule as reading it), in the same organisation.
+async function mayOpenChatFile(user, path) {
+  const msg = await ChatMessage.findOne({ orgId: user.orgId, deletedAt: null, "attachments.url": path }, "channelId").lean();
+  const channel = msg && await ChatChannel.findById(msg.channelId).lean();
+  return !!channel && String(channel.orgId) === String(user.orgId) && R.canView(channel, { id: user.id, role: user.role });
+}
 
 // GET /api/files/sign?path=/uploads/... or an authenticated Cloudinary URL → { url, exp }. Same 404 for "no such file" and "not yours".
 export async function signFile(req, res) {
@@ -27,7 +37,7 @@ export async function signFile(req, res) {
     ...bugs.map((b) => ({ task: null, project: projects.get(String(b.projectId)) ?? null })).filter((x) => x.project),
   ];
   if (!places.length) places.push(...[...projects.values()].filter((p) => (p.attachments ?? []).some((a) => a.filePath === path)).map((project) => ({ task: null, project })));
-  if (!mayOpenAny(req.user, places)) return res.status(404).json(NOT_FOUND);
+  if (!mayOpenAny(req.user, places) && !(await mayOpenChatFile(req.user, path))) return res.status(404).json(NOT_FOUND);
   if (cld) {
     // Works on the Free plan, also for PDFs, and it expires; Cloudinary's own signed delivery URLs do neither (D-164).
     const link = fileStore.signedUrl(path);

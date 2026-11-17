@@ -22,6 +22,7 @@ const auditLogSchema = new Schema(
         "task_reassigned", "workload_threshold_changed", "asset_created", "asset_updated", "asset_deleted",
         "quest_created", "quest_updated", "quest_deleted", "quest_published", "quest_ended", "quest_completed", "quest_repeated", "quest_joined",
         // ── Batch 5: departments, member department, logo ──
+        "company_community_created", "company_members_added", // item 78: the Company community every organisation has
         "department_created", "department_renamed", "department_archived", "department_restored", "member_department_changed", "org_logo_updated", "org_logo_removed",
         "flag_raised", "flag_dismissed", "flag_reopened", "flag_confirmed",
         // ── Manager Reports (M-6) ──
@@ -51,6 +52,7 @@ const auditLogSchema = new Schema(
         "group_created", "group_updated", "group_member_added", "group_member_removed",
         "group_admin_added", "group_admin_removed", "group_poster_added", "group_poster_removed",
         "group_request_approved", "group_request_rejected", "group_join_approved", "group_join_rejected",
+        "announcement_posted", // items 79/80
         "chat_message_removed", "chat_message_pinned", "chat_message_unpinned",
         // ── V2 Phase 3 · M-8: View as (D-109) ──
         "view_as_started", "view_as_ended", "view_as_blocked",

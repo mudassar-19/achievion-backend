@@ -1,5 +1,6 @@
 import { defaultXpValue } from "../services/xpEngine.js";
 import { Schema, model, Types } from "mongoose";
+import { indexChanged } from "../services/rag/ragIndexHook.js";
 
 const taskSchema = new Schema(
   {
@@ -69,6 +70,7 @@ const taskSchema = new Schema(
     submissionChecklist: [{ type: String }],
     // E-3b (D-185): the designer's handoff note (composer), and what approved designs handed to this task (read-only).
     submissionHandoff: { type: String, default: "", maxlength: 1000 },
+    submissionAiAssisted: { type: Boolean, default: false }, // F-066: the person says an AI tool helped. Shown to the reviewer; never changes XP or scores.
     designHandoffs: [{
       _id: false,
       fromTask:  { type: Types.ObjectId, ref: "Task" },
@@ -282,6 +284,7 @@ taskSchema.index({ reviewedBy: 1 });
 // Hooked here so every Done path (both review routes) is covered without touching the review code.
 taskSchema.pre("save", function () { this.$locals.becameDone = this.isModified("status") && this.status === "Done"; });
 taskSchema.post("save", function (doc) { if (doc.$locals?.becameDone) notifyUnblocked(doc); });
+taskSchema.post(["save", "findOneAndUpdate"], function (doc) { indexChanged(doc); }); // QA2-66: keep the AI knowledge index fresh
 taskSchema.post("findOneAndUpdate", function (doc) {
   const u = this.getUpdate() ?? {};
   if (doc?.status === "Done" && (u.$set?.status === "Done" || u.status === "Done")) notifyUnblocked(doc);

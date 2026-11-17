@@ -11,7 +11,7 @@ export const FEATURE_PREFIX = "emp_"; // every call is logged in AIPromptLog as 
 
 const EXPERT = {
   developer: { key: "codementor", name: "CodeMentor", blurb: "Pre-review checklist and code craft." },
-  designer: { key: "pixelcritic", name: "PixelCritic", blurb: "Design feedback before you hand off." },
+  designer: { key: "pixelcritic", name: "PixelCritic", blurb: "Text feedback on the design brief, link and handoff checklist you paste into the chat. It does not look at images." },
   tester: { key: "bughunter", name: "BugHunter", blurb: "Test ideas and clear bug reports." },
 };
 const persona = (id, p) => ({ id, ...p, promptId: `emp-chat-${p.key}`, tipsPromptId: `emp-tips-${p.key}` });

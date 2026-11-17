@@ -662,7 +662,7 @@ export async function inlineStreakIncrement(userIds, orgId, now = new Date()) {
   const id  = String(orgId);
   const org = await Organization.findOne(IS_OBJECT_ID.test(id) ? { _id: id } : { orgId: id }, "workingTime").lean();
   const wt  = orgWorkTime(org);
-  const day = streakDayInfo(now, { workingDays: wt.workingDays, timezone: wt.timezone });
+  const day = streakDayInfo(now, { workingDays: wt.workingDays, timezone: wt.timezone, holidays: wt.holidays });
   if (!day.isWorkingDay) return { modifiedCount: 0 };
   const ids = Array.isArray(userIds) ? userIds : [userIds];
   return GamificationProfile.updateMany(
@@ -682,7 +682,7 @@ export async function judgeDailyStreaks(now = new Date()) {
   const orgMap    = new Map(orgDocs.map((o) => [String(o._id), o]));
 
   for (const orgId of allOrgIds) {
-    const { workingDays, timezone } = orgWorkTime(orgMap.get(String(orgId)));
+    const { workingDays, timezone, holidays } = orgWorkTime(orgMap.get(String(orgId)));
     const throughDate = lastJudgeableDate(now, timezone);
 
     const profiles = await GamificationProfile.find(
@@ -692,7 +692,7 @@ export async function judgeDailyStreaks(now = new Date()) {
 
     for (const profile of profiles) {
       const r = await judgeProfileStreak(profile, {
-        workingDays, timezone, throughDate,
+        workingDays, timezone, throughDate, holidays,
         hadTask: async (dayStr) => {
           const { start, end } = localDayBoundsUTC(dayStr, timezone);
           return !!(await Task.exists({ status: "Done", completedAt: { $gte: start, $lt: end }, assignees: profile.userId }));

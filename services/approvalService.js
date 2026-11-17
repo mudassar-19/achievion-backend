@@ -6,6 +6,7 @@ import Task          from "../models/Task.js";
 import AuditLog      from "../models/AuditLog.js";
 import { getIo }     from "../utils/io.js";
 import { approvalNotice, resultNotice, pendingDuplicateQuery, conflictWith } from "./approvalNotice.js";
+import { ensureCompany } from "./companyCommunity.js";
 
 // ── Human-readable label per action type ─────────────────────────────────────
 function actionLabel(actionType, payload, target) {
@@ -146,6 +147,8 @@ export async function executeApproval(approvalId, approverId = null, directorNot
         { orgId: payload.orgId },
         { $addToSet: { members: result._id } }
       );
+      // Item 78 (D-547): a new employee joins the Company community (General, Random, Announcements) on joining. Never blocks the approval.
+      await ensureCompany(approval.orgId, { actorId: approverId }).catch((e) => console.error("[company] join failed:", e.message));
       break;
 
     case "DELETE_EMPLOYEE":

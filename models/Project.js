@@ -1,4 +1,5 @@
 import { Schema, model, Types } from "mongoose";
+import { indexChanged } from "../services/rag/ragIndexHook.js";
 
 const statusHistorySchema = new Schema(
   {
@@ -117,6 +118,7 @@ const projectSchema = new Schema(
   { timestamps: true }
 );
 
+projectSchema.post(["save", "findOneAndUpdate"], function (doc) { indexChanged(doc); }); // QA2-66: keep the AI knowledge index fresh
 projectSchema.index({ orgId: 1, status: 1 });
 projectSchema.index({ orgId: 1, priority: 1 });
 projectSchema.index({ orgId: 1, status: 1, deadline: 1 });

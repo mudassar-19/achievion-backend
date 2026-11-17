@@ -3,6 +3,7 @@ import Organization from "../models/Organization.js";
 import Team         from "../models/Team.js";
 import Task         from "../models/Task.js";
 import User         from "../models/User.js";
+import { weekLabel, teamTaskFilter, cellTier } from "../services/heatmapRules.js";
 
 const IS_OID   = /^[0-9a-f]{24}$/i;
 const orgFilter = (orgId) => IS_OID.test(orgId) ? { _id: orgId } : { orgId };
@@ -34,7 +35,7 @@ export async function capacityHeatmap(req, res) {
     const end = new Date(start);
     end.setDate(start.getDate() + 6);
     end.setHours(23, 59, 59, 999);
-    const label = `W${String(start.getMonth() + 1).padStart(2,"0")}/${String(start.getDate()).padStart(2,"0")}`;
+    const label = weekLabel(start, end);
     weekRanges.push({ start, end, label });
   }
 
@@ -44,7 +45,7 @@ export async function capacityHeatmap(req, res) {
         {
           $match: {
             orgId,
-            teamId: team._id,
+            ...teamTaskFilter(team), // by team tag or by member (Task.teamId alone left most cells empty)
             status: { $nin: ["Done"] },
             deadline: { $gte: wr.start, $lte: wr.end },
             estimatedHours: { $gt: 0 },
@@ -57,7 +58,7 @@ export async function capacityHeatmap(req, res) {
       const availableHours = teamWeeklyCapacity({ memberCount: team.members?.length ?? 0, hoursPerDay, workingDays });
       // No members → no capacity: pct is null (not 0 %), so the UI can say "No members" instead of "Healthy".
       const pct = availableHours > 0 ? Math.round((plannedHours / availableHours) * 100) : null;
-      return { week: wr.label, plannedHours, availableHours, pct, noMembers: availableHours === 0 };
+      return { week: wr.label, plannedHours, availableHours, pct, tier: cellTier(pct), noMembers: availableHours === 0 };
     }));
     return { teamId: team._id, teamName: team.name, cells };
   }));

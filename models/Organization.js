@@ -104,6 +104,7 @@ const organizationSchema = new Schema(
       hoursPerDay:  { type: Number, default: 8,       min: 4, max: 12 }, // RND-26: 4–12 step 0.5
       workingDays:  { type: [Number], default: [1,2,3,4,5] }, // 0=Sun…6=Sat
       timezone:     { type: String,  default: "Asia/Karachi" }, // RND-19: org timezone for streak cron
+      holidays:     { type: [String], default: [] },            // F-001: "YYYY-MM-DD" days off (max 60), like a weekend for streaks, deadlines, capacity
     },
 
     // M-4: Director default workload limit (% of daily capacity); above it a person is "Overloaded".

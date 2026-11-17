@@ -152,7 +152,7 @@ export async function getCandidates(req, res) {
     getBulkWorkloadSnapshots([fromId, ...pool.map((u) => u._id)], { workTime }), thresholdOf(scope, req.user.id), User.findById(fromId, "name role").lean(),
   ]);
   const snapOf = new Map(snaps.map((s) => [String(s.userId), s]));
-  const delta = dailyHoursForTask(task, new Date(), workTime.workingDays, workTime.timezone);
+  const delta = dailyHoursForTask(task, new Date(), workTime.workingDays, workTime.timezone, workTime.holidays);
   const eligible = [], other = [];
   for (const u of pool) {
     const s = snapOf.get(String(u._id)); if (!s) continue;

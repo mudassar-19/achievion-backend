@@ -16,9 +16,11 @@ import { VALID_ROLES }    from "../models/User.js";
 import { awardXp, checkAndAwardBadges, DEFAULT_BADGE_THRESHOLDS, adjustUserXp } from "../services/gamificationService.js";
 import { projectHealth }  from "../services/projectHealth.js";
 import { orgQualityFactor } from "../services/orgQuality.js";
+import { pct, projectProgressByIds } from "../services/moduleProgress.js";
 import { xpZScore, Z_LIMIT } from "../services/anomalyRules.js";
 import XpLog from "../models/XpLog.js";
 import { shouldFlagAdjust } from "../services/xpAdjustRules.js";
+import { xpTotalsByRole } from "../services/xpByRole.js";
 
 // Map a role string to its category label (mirrors ROLE_CATEGORY_MAP)
 function roleToCat(role) {
@@ -466,7 +468,7 @@ export async function getGarden(req, res) {
 
   const result = projects.map((p) => {
     const s           = statsMap[p._id.toString()] ?? { totalTasks: 0, doneTasks: 0, openTasks: 0, overdueTasks: 0 };
-    const progressPct = s.totalTasks > 0 ? Math.round((s.doneTasks / s.totalTasks) * 100) : 0;
+    const progressPct = pct(s.doneTasks, s.totalTasks); // QA2-64: the one project progress formula
     const { score, band } = projectHealth({
       startDate:    p.startDate,
       deadline:     p.deadline,
@@ -475,7 +477,7 @@ export async function getGarden(req, res) {
       overdueTasks: s.overdueTasks,
       totalTasks:   s.totalTasks,
     });
-    return { id: p._id, title: p.title, status: p.status, healthScore: score, healthBand: band };
+    return { id: p._id, title: p.title, status: p.status, healthScore: score, healthBand: band, progressPct };
   });
 
   const onTrackCount = result.filter((p) => p.healthBand === "On track").length;
@@ -497,23 +499,8 @@ export async function getProjects(req, res) {
     .lean();
 
   const projectIds    = projects.map((p) => p._id);
-  const completionAgg = await Task.aggregate([
-    { $match: { projectId: { $in: projectIds } } }, // UI-B: was `project`, a field Task does not have (completion was always 0)
-    {
-      $group: {
-        _id:   "$projectId",
-        total: { $sum: 1 },
-        done:  { $sum: { $cond: [{ $eq: ["$status", "Done"] }, 1, 0] } },
-      },
-    },
-  ]);
-
-  const completionMap = Object.fromEntries(
-    completionAgg.map((c) => [
-      c._id.toString(),
-      c.total > 0 ? Math.round((c.done / c.total) * 100) : 0,
-    ])
-  );
+  // QA2-64: the same project progress the Garden and the project page use.
+  const completionMap = Object.fromEntries([...(await projectProgressByIds(projectIds))].map(([id, v]) => [id, v.pct]));
 
   res.json(
     projects.map((p) => ({
@@ -523,6 +510,7 @@ export async function getProjects(req, res) {
       xpPool:     p.xpPool,
       leadName:    p.managerId?.name ?? "Unassigned",
       completion:  completionMap[p._id.toString()] ?? 0,
+      startDate:   p.startDate ?? null, // QA2-65: the Portfolio date filter works on overlap (start to deadline)
       deadline:    p.deadline ?? null,
       managerId:   p.managerId?._id ?? p.managerId ?? null,
       managerName: p.managerId?.name ?? null,
@@ -980,9 +968,6 @@ export async function getXpByRole(req, res) {
 
   // Get all member IDs in this org (exclude Directors — D-025: they don't earn XP)
   const members = await User.find({ orgId, status: { $ne: "deleted" }, role: { $ne: "Director" } }, "_id role").lean();
-  const roleMap = {};
-  members.forEach((m) => { roleMap[String(m._id)] = m.role ?? "Unknown"; });
-
   const memberIds = members.map((m) => m._id);
 
   // Aggregate currentXp grouped by user, then group by role
@@ -991,17 +976,7 @@ export async function getXpByRole(req, res) {
     "userId currentXp"
   ).lean();
 
-  const roleTotals = {};
-  profiles.forEach((p) => {
-    const role = roleMap[String(p.userId)] ?? "Unknown";
-    roleTotals[role] = (roleTotals[role] ?? 0) + (p.currentXp ?? 0);
-  });
-
-  const data = Object.entries(roleTotals)
-    .map(([role, totalXp]) => ({ role, totalXp }))
-    .sort((a, b) => b.totalXp - a.totalXp);
-
-  res.json({ data });
+  res.json({ data: xpTotalsByRole(members, profiles) }); // QA2-23: 0-XP roles included
 }
 
 // ── GET /api/director/reports/task-stats ─────────────────────────────────────

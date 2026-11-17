@@ -75,7 +75,7 @@ export async function createCommunity(req, res) {
 
   const { name, description = "", icon = "💬", type = "custom", memberIds = [], projectId, department, teamId, initialGroups = [] } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: "Community name is required." });
-  const tooLong = firstLengthError([["Community name", name, "name"], ["Description", description, "description"]]);
+  const tooLong = firstLengthError([["Community name", name, "group"], ["Description", description, "description"]]);
   if (tooLong) return res.status(400).json({ error: tooLong });
 
   const leaders = await orgLeaderIds(orgId);

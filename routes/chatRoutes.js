@@ -1,6 +1,8 @@
 import { Router } from "express";
 import { verifyToken } from "../middleware/authMiddleware.js";
 import * as chatCtrl from "../controllers/chatController.js";
+import { attachmentUpload, fileStore } from "../middleware/upload.js";
+import { CHAT_MAX_FILES } from "../services/chatAttachments.js";
 
 const router = Router();
 router.use(verifyToken);
@@ -10,7 +12,11 @@ router.get("/channels",                              chatCtrl.getChannels);
 router.post("/channels",                             chatCtrl.createChannel);
 router.get("/channels/:id",                          chatCtrl.getGroupInfo);
 router.get("/channels/:id/messages",                 chatCtrl.getMessages);
-router.post("/channels/:id/messages",                chatCtrl.sendMessage);
+// F-018: a plain JSON message skips the file steps (so text still works when file storage is off); a multipart one goes through
+// the same pipeline as task attachments (storage guard → size/count → type by name and bytes → store).
+const withFiles = attachmentUpload("files", CHAT_MAX_FILES).map((mw) => (req, res, next) => (req.is("multipart/form-data") ? mw(req, res, next) : next()));
+router.post("/channels/:id/messages",                ...withFiles, chatCtrl.sendMessage);
+router.get("/attachments/status",                    (_req, res) => res.json({ enabled: fileStore.mode() !== "refuse", maxFiles: CHAT_MAX_FILES }));
 router.post("/channels/:id/read",                    chatCtrl.markRead);
 router.get("/channels/:id/unread-count",             chatCtrl.getUnreadCount);
 router.patch("/channels/:id/settings",               chatCtrl.updateGroupSettings);

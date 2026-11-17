@@ -4,6 +4,7 @@
 // Order on every route: scope (404) → AI configured (503) → per-user daily limit (429) → call.
 import mongoose from "mongoose";
 import Organization from "../models/Organization.js";
+import { orgDay } from "../services/aiDay.js";
 import Task from "../models/Task.js";
 import { withFit, fitNote } from "../services/assignFit.js";
 import Sprint from "../models/Sprint.js";
@@ -122,7 +123,8 @@ export async function getContext(req, res) {
   const s = await tlScope(req, res); if (!s) return;
   const ctx = await resolve(req, s, req.query.kind ? readContext(req.query) : tlContextFromPath(req.query.path, req.query.search));
   const refs = makeRefs();
-  const [usage, snap, insight, lists] = await Promise.all([usageOf(req, s.scope.org), teamSnapshot(req, s, refs), AICache.findOne({ key: cacheKey("tl_insight", { user: req.user.id, day: dayKey() }), expiresAt: { $gt: new Date() } }).lean(), contextLists(s, null)]);
+  const { day } = await orgDay(req.user.orgId);
+  const [usage, snap, insight, lists] = await Promise.all([usageOf(req, s.scope.org), teamSnapshot(req, s, refs), AICache.findOne({ key: cacheKey("tl_insight", { user: req.user.id, day }), expiresAt: { $gt: new Date() } }).lean(), contextLists(s, null)]);
   res.json({
     configured: aiConfigured(), usage, context: ctx, prompts: TL_PROMPTS_FOR[ctx.kind] ?? TL_PROMPTS_FOR.team,
     cards: tlProactiveCards({ overloaded: snap.overloaded, blocked: snap.blocked, reviewQueue: snap.reviewQueue }),
@@ -177,7 +179,8 @@ const targetLink = (refs, ref, snap) => {
 export async function getInsight(req, res) {
   const s = await tlScope(req, res); if (!s) return;
   const usage = await gate(req, res, s, { cacheFirst: true }); if (!usage) return;
-  const key = cacheKey("tl_insight", { user: req.user.id, day: dayKey() });
+  const { day, ttlMs } = await orgDay(req.user.orgId); // QA2-70: stale at the org's midnight
+  const key = cacheKey("tl_insight", { user: req.user.id, day });
   const hit = req.query.refresh ? null : await AICache.findOne({ key, expiresAt: { $gt: new Date() } }).lean();
   if (hit) return res.json({ insight: hit.value, dismissed: hit.dismissed, cached: true, cachedAt: hit.updatedAt, key, usage, aiGenerated: true });
   if (overLimit(res, usage)) return;
@@ -187,12 +190,12 @@ export async function getInsight(req, res) {
     const { value, fromCache } = await ask(req, { feature: "tl_insight", promptId: "tl-insight", data: prune(snap, { maxArray: 15 }), check: (o) => validateTlInsight(o, refs) });
     const names = namesOf(snap), named = (t) => withNames(t, names);
     const view = value.kind === "none" ? { kind: "none" } : { kind: value.kind, title: named(value.title), body: named(value.body), why: value.why.map(named), target: targetLink(refs, value.target, snap) };
-    const saved = await AICache.findOneAndUpdate({ key }, { $set: { orgId: req.user.orgId, feature: "tl_insight", value: view, dismissed: false, expiresAt: new Date(Date.now() + endOfDay()) } }, { upsert: true, returnDocument: "after" }).lean();
+    const saved = await AICache.findOneAndUpdate({ key }, { $set: { orgId: req.user.orgId, feature: "tl_insight", value: view, dismissed: false, expiresAt: new Date(Date.now() + ttlMs) } }, { upsert: true, returnDocument: "after" }).lean();
     res.json({ insight: view, dismissed: false, cachedAt: saved.updatedAt, key, usage: spent(usage, fromCache), aiGenerated: true });
   } catch (err) { aiFail(res, err, usage); }
 }
 export async function dismissInsight(req, res) {
-  const r = await AICache.updateOne({ key: cacheKey("tl_insight", { user: req.user.id, day: dayKey() }) }, { $set: { dismissed: !req.body?.undo } });
+  const r = await AICache.updateOne({ key: cacheKey("tl_insight", { user: req.user.id, day: (await orgDay(req.user.orgId)).day }) }, { $set: { dismissed: !req.body?.undo } });
   if (!r.matchedCount) return res.status(404).json({ error: "There is no insight to dismiss today." });
   res.json({ ok: true, dismissed: !req.body?.undo });
 }

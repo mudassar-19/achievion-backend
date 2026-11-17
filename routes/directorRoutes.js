@@ -47,7 +47,7 @@ import { listReports, getReport, addMessage, updateReport } from "../controllers
 import { listGoals, createGoal, updateGoal, recalculateGoal } from "../controllers/goalController.js";
 import { listRecaps, pendingRecaps, markSeen, generateRecap }   from "../controllers/recapController.js";
 import { reportPortfolio, reportDelivery, reportCapacity, exportReport } from "../controllers/reportsController.js";
-import { getOrgHealth, saveOrgHealthSnapshot, getOrgHealthHistory, getDeptDetail } from "../controllers/orgHealthController.js";
+import { getOrgHealth, saveOrgHealthSnapshot, getOrgHealthHistory, getDeptDetail, getOrgWellbeing } from "../controllers/orgHealthController.js";
 import { getSuccessCriteria } from "../controllers/successCriteriaController.js";
 import { capacityHeatmap }    from "../controllers/capacityHeatmapController.js";
 import { explainChart, suggestRebalance, sendRebalanceToManager, weeklySummary, aiStatus, askAchievion, reindexRag } from "../controllers/aiGatewayController.js";
@@ -138,6 +138,7 @@ router.get("/reports/export",                     exportReport);
 router.get("/org-health",                         getOrgHealth);
 router.post("/org-health/snapshot",               saveOrgHealthSnapshot);
 router.get("/org-health/history",                 getOrgHealthHistory);
+router.get("/org-health/wellbeing",               getOrgWellbeing);
 // Batch 5 (D4, N5, D7, D9)
 router.get("/departments",                        org.listDepartments);
 router.post("/departments",                       org.createDepartment);

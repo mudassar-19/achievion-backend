@@ -10,6 +10,7 @@ import * as approvalSvc  from "../services/approvalService.js";
 import { sanitizeApproval } from "./approvalController.js";
 import { validateSuspendReason } from "../services/orgAdminRules.js";
 import { defaultDepartmentFor, needsDefaults, DEFAULT_DEPARTMENTS } from "../services/departmentDefault.js";
+import { firstLengthError } from "../services/textLimits.js";
 
 // ── Role promotion helper ─────────────────────────────────────────────────────
 const ROLE_RANK = {
@@ -125,6 +126,9 @@ export async function createEmployee(req, res) {
   const { name, email, role = "Developer", roleLabel } = req.body ?? {};
   // Item 7 (D-541): the department comes from the role category (below, once the organisation is loaded) unless one was given.
   let department = req.body.department?.trim() || null;
+
+  const tooLong = firstLengthError([["Name", name, "person"], ["Role label", roleLabel, "role"]]); // QA2-21
+  if (tooLong) return clientError(res, 400, tooLong);
 
   // Validation
   if (!name?.trim() || !email?.trim()) {

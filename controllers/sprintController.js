@@ -15,6 +15,7 @@ import {
 } from "../services/sprintRules.js";
 
 import { startInPast } from "../services/startDateRules.js";
+import { readHolidays } from "../services/workloadRules.js";
 
 const CLOSED_PROJECT = ["Archived", "Completed", "Deleted"];
 const LEADERS = ["Director", "Manager"];
@@ -106,7 +107,7 @@ export async function getSprintDetail(req, res) {
     sprint.projectId ? Sprint.find({ projectId: sprint.projectId }, "name status startDate endDate").lean() : [],
   ]);
   const wt = scope.org.workingTime ?? {};
-  const capacity = teamCapacity({ memberCount: team(project).length, hoursPerDay: wt.hoursPerDay ?? 7, workingDays: wt.workingDays?.length ? wt.workingDays : undefined, startDate: sprint.startDate, endDate: sprint.endDate });
+  const capacity = teamCapacity({ memberCount: team(project).length, hoursPerDay: wt.hoursPerDay ?? 7, workingDays: wt.workingDays?.length ? wt.workingDays : undefined, holidays: readHolidays(wt.holidays), startDate: sprint.startDate, endDate: sprint.endDate });
   res.json({
     id: sprint._id, name: sprint.name, goal: sprint.goal, status: statusLabel(sprint.status), startDate: sprint.startDate, endDate: sprint.endDate,
     completedAt: sprint.completedAt,

@@ -19,6 +19,7 @@ import { callChain, aiConfigured } from "../services/aiChain.js";
 import { parseJsonLoose } from "../services/aiEvalRules.js";
 import { getBulkWorkloadSnapshots } from "../services/workloadService.js";
 import { orgWorkTime } from "../services/workloadRules.js";
+import { orgDay } from "../services/aiDay.js";
 import { effectiveThreshold, statusBadge, loadLabel } from "../services/resourceRules.js";
 import { getAlertSettings } from "../services/alertRules.js";
 import {
@@ -169,9 +170,10 @@ export async function getContext(req, res) {
   const lists = await contextLists(scope);
   const ctx = readContext({ context: req.query.kind ? req.query : { ...req.query, kind: "path" } }, lists);
   const refs = makeRefs();
+  const { day } = await orgDay(req.user.orgId);
   const [usage, snap, insight] = await Promise.all([
     usageOf(req, scope.org), teamSnapshot(req, scope, refs),
-    cacheGet(cacheKey("mgr_insight", { user: req.user.id, day: dayKey() })),
+    cacheGet(cacheKey("mgr_insight", { user: req.user.id, day })),
   ]);
   const soon = snap._sprints.filter((s) => s.endDate && +new Date(s.endDate) - Date.now() < 3 * DAY && s.total > s.done)
     .map((s) => ({ id: s.id, name: s.name, days: Math.max(0, Math.ceil((+new Date(s.endDate) - Date.now()) / DAY)), left: s.total - s.done }));
@@ -260,7 +262,8 @@ const named = (text, snap) => withNames(text, namesOf(snap));
 
 export async function getInsight(req, res) {
   const g = await gate(req, res, { cacheFirst: true }); if (!g) return;
-  const key = cacheKey("mgr_insight", { user: req.user.id, day: dayKey() });
+  const { day, ttlMs } = await orgDay(req.user.orgId); // QA2-70: stale at the org's midnight
+  const key = cacheKey("mgr_insight", { user: req.user.id, day });
   const hit = req.query.refresh ? null : await cacheGet(key);
   if (hit) return res.json({ insight: hit.value, dismissed: hit.dismissed, cached: true, cachedAt: hit.updatedAt, key, usage: g.usage, aiGenerated: true });
   if (overLimit(res, g.usage)) return;
@@ -271,12 +274,12 @@ export async function getInsight(req, res) {
     const view = value.kind === "none" ? { kind: "none" } : {
       kind: value.kind, title: named(value.title, snap), body: named(value.body, snap), why: value.why.map((w) => named(w, snap)), target: targetLink(refs, value.target, snap),
     };
-    const saved = await cachePut(key, req.user.orgId, "mgr_insight", view, endOfDay());
+    const saved = await cachePut(key, req.user.orgId, "mgr_insight", view, ttlMs);
     res.json({ insight: view, dismissed: false, cachedAt: saved.updatedAt, key, usage: spent(g.usage, fromCache), aiGenerated: true });
   } catch (err) { aiFail(res, err, g.usage); }
 }
 export async function dismissInsight(req, res) {
-  const key = cacheKey("mgr_insight", { user: req.user.id, day: dayKey() });
+  const key = cacheKey("mgr_insight", { user: req.user.id, day: (await orgDay(req.user.orgId)).day });
   const r = await AICache.updateOne({ key }, { $set: { dismissed: !req.body?.undo } });
   if (!r.matchedCount) return res.status(404).json({ error: "There is no insight to dismiss today." });
   res.json({ ok: true, dismissed: !req.body?.undo });

@@ -19,6 +19,7 @@ import { getIo }              from "../utils/io.js";
 import { aiEvalView, finalScore } from "../services/aiEvalService.js";
 import { healthForProjects } from "../services/projectHealthService.js";
 import { parseTlScore }       from "../services/aiEvalRules.js";
+import { applyTaskProgress } from "../services/moduleProgress.js";
 import { getBulkWorkloadSnapshots, ROLE_TO_CATEGORY, ROLE_TASK_ELIGIBILITY, countWorkingDays, loadOrgWorkTime } from "../services/workloadService.js";
 
 // ── Helper: verify TL is a member of the project ─────────────────────────────
@@ -166,7 +167,7 @@ export async function getMilestones(req, res) {
   const { id: userId, orgId } = req.user;
   const project = await assertTLProject(req.params.id, userId, orgId);
   if (!project) return res.status(404).json({ error: "Project not found." });
-  const milestones = await Milestone.find({ projectId: project._id }).sort({ order: 1 }).lean();
+  const milestones = await applyTaskProgress(await Milestone.find({ projectId: project._id }).sort({ order: 1 }).lean()); // QA2-64
   res.json(milestones);
 }
 
@@ -371,7 +372,7 @@ export async function getDashboard(req, res) {
       { $match: { projectId: { $in: projectIds }, orgId } },
       { $group: { _id: "$status", count: { $sum: 1 } } },
     ]),
-    Milestone.find({ projectId: { $in: projectIds } }).lean(),
+    Milestone.find({ projectId: { $in: projectIds } }).lean().then(applyTaskProgress), // QA2-64
     Task.find({
       projectId: { $in: projectIds },
       orgId,
@@ -465,7 +466,7 @@ export async function getProjectDetail(req, res) {
   if (!project) return res.status(404).json({ error: "Project not found or access denied." });
 
   const [milestones, healthMap] = await Promise.all([
-    Milestone.find({ projectId: project._id }).sort({ order: 1 }).lean(),
+    Milestone.find({ projectId: project._id }).sort({ order: 1 }).lean().then(applyTaskProgress), // QA2-64
     healthForProjects([project]), // computed health + task counts (D-077)
   ]);
   const health = healthMap.get(String(project._id));
@@ -672,6 +673,7 @@ export async function getMilestoneDetail(req, res) {
 
   const milestone = await Milestone.findOne({ _id: milestoneId, projectId }).lean();
   if (!milestone) return res.status(404).json({ error: "Milestone not found." });
+  await applyTaskProgress([milestone]); // QA2-64
 
   const tasks = await Task.find({ milestoneId, orgId })
     .populate("assignee",  "name role department")
@@ -683,7 +685,7 @@ export async function getMilestoneDetail(req, res) {
   const due      = milestone.dueDate   ?? null;
   const workTime = await loadOrgWorkTime(orgId); // 4.2a: org Working Time, not a hard-coded 7 h / Mon-Fri
   const DAILY_H  = workTime.hoursPerDay;
-  const workingDays    = (start && due) ? countWorkingDays(new Date(start), new Date(due), workTime.workingDays, workTime.timezone) : 0;
+  const workingDays    = (start && due) ? countWorkingDays(new Date(start), new Date(due), workTime.workingDays, workTime.timezone, workTime.holidays) : 0;
   // workDone = sum of estimatedHours of completed tasks only
   const workDone       = tasks
     .filter((t) => t.status === "Done")
@@ -1294,7 +1296,7 @@ export async function getSprintView(req, res) {
     Milestone.find({
       projectId: { $in: projectIds },
       status:    "In Progress",
-    }).sort({ dueDate: 1 }).lean(),
+    }).sort({ dueDate: 1 }).lean().then(applyTaskProgress), // QA2-64
 
     Task.find({
       projectId: { $in: projectIds },
@@ -1557,7 +1559,7 @@ export async function getAnalytics(req, res) {
   const [gProfiles, milestones, recentTasks, sprints, openTasks] = await Promise.all([
     GamificationProfile.find({ userId: { $in: memberObjIds } }, "userId stats level totalXp hp")
       .populate("userId", "name role department").lean(),
-    Milestone.find({ projectId: { $in: projectIds } }).lean(),
+    Milestone.find({ projectId: { $in: projectIds } }).lean().then(applyTaskProgress), // QA2-64
     Task.find({ orgId, projectId: { $in: projectIds }, createdAt: { $gte: thirtyDaysAgo } }, "status priority isLate").lean(),
     Sprint.find({ orgId, $or: [{ projectId: { $in: projectIds } }, { createdBy: uid }] }).populate("tasks", "status").lean(),
     Task.find({ orgId, projectId: { $in: projectIds }, assignee: { $in: memberObjIds }, status: { $nin: ["Done", "Backlog"] } }, "assignee status").lean(),

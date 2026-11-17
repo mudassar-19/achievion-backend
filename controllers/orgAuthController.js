@@ -7,6 +7,7 @@ import User          from "../models/User.js";
 import AuditLog      from "../models/AuditLog.js";
 import GamificationProfile from "../models/GamificationProfile.js";
 import ChatChannel   from "../models/ChatChannel.js";
+import { firstLengthError } from "../services/textLimits.js";
 import { checkAndAwardBadges, checkAndAwardTitles } from "../services/gamificationService.js";
 
 const PASSWORD_MIN = 8;
@@ -76,6 +77,8 @@ export async function registerOrg(req, res) {
   const { orgName, adminEmail, password } = req.body ?? {};
 
   if (!orgName?.trim())     return clientError(res, 400, "Organization name is required.");
+  const nameTooLong = firstLengthError([["Organization name", orgName, "org"]]); // QA2-21
+  if (nameTooLong) return clientError(res, 400, nameTooLong);
   if (!adminEmail?.trim())  return clientError(res, 400, "Admin email is required.");
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(adminEmail)) return clientError(res, 400, "Enter a valid email.");
   if (!password)            return clientError(res, 400, "Password is required.");
@@ -167,6 +170,8 @@ export async function setupDirector(req, res) {
   const { directorName, directorEmail } = req.body ?? {};
 
   if (!directorName?.trim()) return clientError(res, 400, "Director name is required.");
+  const dirTooLong = firstLengthError([["Director name", directorName, "person"]]); // QA2-21
+  if (dirTooLong) return clientError(res, 400, dirTooLong);
   if (!directorEmail?.trim()) return clientError(res, 400, "Director email is required.");
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(directorEmail)) return clientError(res, 400, "Enter a valid director email.");
 

@@ -57,11 +57,11 @@ export function membershipUpdate(action, taskId) {
 }
 
 // Working days in [start, end] (UTC dates, inclusive) × hours/day × people.
-export function teamCapacity({ memberCount, hoursPerDay = 7, workingDays = [1, 2, 3, 4, 5], startDate, endDate }) {
+export function teamCapacity({ memberCount, hoursPerDay = 7, workingDays = [1, 2, 3, 4, 5], startDate, endDate, holidays = [] }) {
   const s = toDate(startDate), e = toDate(endDate);
   let days = 0;
   if (s && e) for (let t = Date.UTC(s.getUTCFullYear(), s.getUTCMonth(), s.getUTCDate()); t <= e.getTime(); t += DAY) {
-    if (workingDays.includes(new Date(t).getUTCDay())) days++;
+    if (workingDays.includes(new Date(t).getUTCDay()) && !holidays.includes(new Date(t).toISOString().slice(0, 10))) days++; // F-001
   }
   return { days, people: memberCount, hoursPerDay, hours: days * hoursPerDay * memberCount };
 }

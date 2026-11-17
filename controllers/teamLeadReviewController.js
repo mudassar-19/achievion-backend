@@ -91,7 +91,7 @@ export async function getReview(req, res) {
     id: t._id, title: t.title, description: t.description ?? "", type: t.type, priority: t.priority, difficulty: t.difficulty, status: t.status, deadline: t.deadline, estimatedHours: t.estimatedHours,
     projectId: t.projectId, projectTitle: projectIn(s, t.projectId)?.title ?? "", moduleTitle: t.milestoneId?.title ?? null, assignees: people(t).map((x) => ({ id: x._id, name: x.name, role: x.role })),
     acceptanceCriteria: t.acceptanceCriteria ?? [], benchmark: t.benchmark ?? "", isLate: !!t.isLate, submittedAt: t.submittedAt ?? t.updatedAt,
-    submission: { note: t.submissionNote ?? "", links: t.submissionLinks ?? [], files: t.submissionFiles ?? [], content: t.submissionContent ?? "", checklist: t.submissionChecklist ?? [] },
+    submission: { note: t.submissionNote ?? "", links: t.submissionLinks ?? [], files: t.submissionFiles ?? [], content: t.submissionContent ?? "", checklist: t.submissionChecklist ?? [], aiAssisted: Boolean(t.submissionAiAssisted) },
     revisions: (t.revisionHistory ?? []).filter((r) => r.type === "revision_requested").map((r) => ({ id: r._id, at: r.requestedAt, by: r.requestedBy?.name ?? null, comment: r.comment, unmet: r.unmetCriteria ?? [] })),
     resubmissionCount: t.resubmissionCount ?? 0, maxResubmissions: t.maxResubmissions ?? 3, limitState: (t.resubmissionCount ?? 0) >= (t.maxResubmissions ?? 3) ? limitState(limit) : null,
     aiEval: aiEvalView(t, reviewed), aiStatus: aiStatus(t.aiEval),

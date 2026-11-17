@@ -2,6 +2,8 @@ import Organization    from "../models/Organization.js";
 import User           from "../models/User.js";
 import Task            from "../models/Task.js";
 import OrgHealthSnapshot from "../models/OrgHealthSnapshot.js";
+import WellbeingSnapshot from "../models/WellbeingSnapshot.js";
+import { snapshotWellbeing } from "../services/reportService.js";
 import { computeOrgHealth, saveSnapshot, orgFilter } from "../services/orgHealthService.js";
 import { WEIGHTS, MIN_SAMPLES, MIN_FACTORS } from "../services/orgHealthRules.js";
 
@@ -87,4 +89,14 @@ export async function listDepartments(req, res) {
   if (!org) return res.status(404).json({ error: "Organization not found." });
   const depts = await User.distinct("department", { orgId: org._id.toString(), status: { $ne: "deleted" }, department: { $ne: null } });
   res.json({ departments: depts.filter(Boolean).sort() });
+}
+
+// ── GET /api/director/org-health/wellbeing — team well-being, counts only (no names, no one person's HP) ───────
+// Today's numbers are taken fresh (and stored as today's snapshot); the trend is the last 30 daily snapshots.
+export async function getOrgWellbeing(req, res) {
+  const org = await Organization.findOne(orgFilter(req.user.orgId), "_id orgId").lean();
+  if (!org) return res.status(404).json({ error: "Organization not found." });
+  const today = await snapshotWellbeing(org);
+  const trend = await WellbeingSnapshot.find({ orgId: String(org._id) }, "day tiers avgHp members").sort({ day: -1 }).limit(30).lean();
+  res.json({ today, trend: trend.reverse() });
 }

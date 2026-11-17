@@ -7,7 +7,8 @@ const LEADS = [
   G("deadline_requests", "Deadline requests", "Requests to move a module or task deadline. They need your answer.", ["deadline_change_request", "extension_requested"], true),
   G("overload", "Someone over their limit", "A person on your projects goes above the workload limit or is at burnout risk.", ["workload_over_limit", "burnout_alert"]),
   G("sprint_events", "Sprint started or closed", "A sprint of your projects starts or closes.", ["sprint_started", "sprint_closed"]),
-  G("mention", "Mentions", "Someone names you in a task comment.", ["mention"]),
+  G("mention", "Mentions", "Someone names you in a task comment or a chat.", ["mention"]),
+  G("direct_messages", "Direct messages", "Someone sends you a direct message.", ["dm_message"]),
   G("decisions", "Approvals and decisions", "Things that wait for your decision.", ["approval_required", "needs_action", "manager_decision_required", "critical"], true),
 ];
 // Item 39/43: the Director's personal choices. Approvals and escalations need an answer, so they stay on (locked).
@@ -27,7 +28,8 @@ const TEAM_LEAD = [
   G("task_unblocked", "Task unblocked", "A task can start because its prerequisites are done.", ["task_unblocked"]),
   G("qa_done", "QA sign-off result", "A Tester passes or fails a task of yours.", ["qa_signoff_done"]),
   G("sprint_events", "Sprint started or closed", "A sprint of your projects starts or closes.", ["sprint_started", "sprint_closed"]),
-  G("mention", "Mentions", "Someone names you in a task comment.", ["mention"]),
+  G("mention", "Mentions", "Someone names you in a task comment or a chat.", ["mention"]),
+  G("direct_messages", "Direct messages", "Someone sends you a direct message.", ["dm_message"]),
   G("xp_gained", "XP and badges", "XP you earn from reviews and badges you unlock.", ["xp", "badge"]),
 ];
 const CONTRIBUTOR = [
@@ -39,7 +41,8 @@ const CONTRIBUTOR = [
   G("task_unblocked", "Task unblocked", "A task can start because its prerequisites are done.", ["task_unblocked"]),
   G("sprint_events", "Sprint started or closed", "A sprint of your projects starts or closes.", ["sprint_started", "sprint_closed"]),
   G("qa_needed", "QA sign-off needed", "A task on your project waits for your sign-off.", ["qa_signoff_needed"], true),
-  G("mention", "Mentions", "Someone names you in a task comment.", ["mention"]),
+  G("mention", "Mentions", "Someone names you in a task comment or a chat.", ["mention"]),
+  G("direct_messages", "Direct messages", "Someone sends you a direct message.", ["dm_message"]),
   G("badge_earned", "Badge unlocked", "When you earn a new badge.", ["badge"]),
   G("level_up", "Level up", "When you reach a new level.", ["system:level_up"]),
   G("xp_gained", "Other XP activity", "Bonuses, challenge rewards and other XP notices.", ["xp"]),

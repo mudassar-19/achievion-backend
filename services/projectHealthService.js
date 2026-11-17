@@ -2,6 +2,7 @@
 // project health goes through here so no screen shows the stored default.
 import Task from "../models/Task.js";
 import { projectHealth } from "./projectHealth.js";
+import { pct } from "./moduleProgress.js";
 
 // projects: [{ _id, startDate?, createdAt?, deadline? }] → Map(id → { score, band, total, done, overdue, progressPct })
 export async function healthForProjects(projects, now = new Date()) {
@@ -30,7 +31,7 @@ export async function healthForProjects(projects, now = new Date()) {
     const c = counts[id] ?? { total: 0, done: 0, byStatus: {} };
     const progressPct = c.total ? (c.done / c.total) * 100 : 0;
     const h = projectHealth({ startDate: p.startDate ?? p.createdAt, deadline: p.deadline, now, progressPct, openTasks: c.total - c.done, overdueTasks: od[id] ?? 0, totalTasks: c.total });
-    out.set(id, { score: h.score, band: h.band, total: c.total, done: c.done, overdue: od[id] ?? 0, byStatus: c.byStatus, progressPct: Math.round(progressPct) });
+    out.set(id, { score: h.score, band: h.band, total: c.total, done: c.done, overdue: od[id] ?? 0, byStatus: c.byStatus, progressPct: pct(c.done, c.total) });
   }
   return out;
 }

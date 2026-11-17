@@ -14,6 +14,7 @@ import ChatCommunity     from "../models/ChatCommunity.js";
 import { getBulkWorkloadSnapshots } from "../services/workloadService.js";
 import { availabilityFor } from "../services/workloadRules.js";
 import { healthForProjects } from "../services/projectHealthService.js";
+import { applyTaskProgress } from "../services/moduleProgress.js";
 
 const IS_OBJECT_ID_MGR = /^[0-9a-f]{24}$/i;
 function orgFilterMgr(orgId) {
@@ -935,7 +936,7 @@ export async function getProjectTimeline(req, res) {
   const [milestones, taskCounts] = await Promise.all([
     Milestone.find({ projectId: { $in: projectIds } })
       .select("title projectId startDate dueDate endDate status progress")
-      .lean(),
+      .lean().then(applyTaskProgress), // QA2-64
     Task.aggregate([
       { $match: { projectId: { $in: projectIds } } },
       { $group: {

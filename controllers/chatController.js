@@ -9,6 +9,12 @@ import mongoose      from "mongoose";
 import * as R        from "../services/chatRules.js";
 import { orgUserIds, chatAudit, addToCommunity, roleOf, unreadCounts } from "../services/chatService.js";
 import { getIo }     from "../utils/io.js";
+import { withDmPeers } from "../services/dmPeer.js";
+import { notifyChat, markChatNoticesRead } from "../services/chatNotify.js";
+import { chatAttachmentsFrom, readSendBody } from "../services/chatAttachments.js";
+import { fileStore } from "../middleware/upload.js";
+import { makeSendLimiter } from "../services/chatSendLimit.js";
+const tooFast = makeSendLimiter();
 
 // Permissions: services/chatRules.js (D-074). Every admin action writes an AuditLog row.
 const { ObjectId } = mongoose.Types;
@@ -40,7 +46,10 @@ export async function getChannels(req, res) {
   const channels = all.filter((ch) => R.canView(ch, { id: userId, role }));
 
   const counts = await unreadCounts(channels, userId); // one aggregate (D-078)
-  const withUnread = channels.map((ch) => ({ ...ch, unread: counts[String(ch._id)] ?? 0 }));
+  // Item 76 (D-544): every DM carries the other person (name, role, avatar), so no screen has to show "dm-<id>-<id>".
+  const peerIds = [...new Set(channels.filter((c) => c.type === "dm").flatMap((c) => c.memberIds.map(String)).filter((id) => id !== String(userId)))];
+  const peers = new Map((await User.find({ _id: { $in: peerIds }, orgId, status: { $ne: "deleted" } }, "name role avatarStyle avatarSeed").lean()).map((u) => [String(u._id), u]));
+  const withUnread = withDmPeers(channels.map((ch) => ({ ...ch, unread: counts[String(ch._id)] ?? 0 })), userId, peers);
 
   res.json(withUnread);
 }
@@ -56,7 +65,7 @@ export async function createChannel(req, res) {
 
   const { name, description, type = "general", memberIds = [], projectId, teamId, postRoles, communityId } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: "Channel name is required." });
-  const tooLong = firstLengthError([["Channel name", name, "name"], ["Description", description, "description"]]);
+  const tooLong = firstLengthError([["Channel name", name, "group"], ["Description", description, "description"]]);
   if (tooLong) return res.status(400).json({ error: tooLong });
   // Groups inside a community go through /api/communities/:id/groups so the community rules apply.
   if (communityId || type === "announcement") return res.status(400).json({ error: "Create community groups from the community." });
@@ -98,7 +107,9 @@ export async function getMessages(req, res) {
   if (!channel) return res.status(404).json({ error: "Channel not found." });
   if (!(await isMember(channel, userId, role, orgId))) return res.status(403).json({ error: "Not a member." });
 
-  const { before, limit = 50 } = req.query;
+  const { before } = req.query;
+  if (before && Number.isNaN(new Date(String(before)).getTime())) return res.status(400).json({ error: "before must be a date." });
+  const limit = Math.min(100, Math.max(1, parseInt(req.query.limit, 10) || 50)); // a page is at most 100 messages
   // Apply per-user clear filter
   const clearedAt = channel.clearedBy?.find((e) => e.userId?.toString() === userId)?.clearedAt ?? null;
 
@@ -110,13 +121,14 @@ export async function getMessages(req, res) {
     .populate("sender",   "name role avatarStyle avatarSeed")
     .populate("mentions", "name role")
     .sort({ createdAt: -1 })
-    .limit(Number(limit))
+    .limit(limit)
     .lean();
 
   await ChatMessage.updateMany(
     { channelId: channel._id, readBy: { $ne: toOid(userId) }, deletedAt: null },
     { $addToSet: { readBy: toOid(userId) } }
   );
+  await markChatNoticesRead(userId, channel._id); // item 77: opening the conversation clears its bell notices
 
   res.json(msgs.reverse());
 }
@@ -124,37 +136,43 @@ export async function getMessages(req, res) {
 // ── POST /api/chat/channels/:id/messages ─────────────────────────────────────
 export async function sendMessage(req, res) {
   const { id: userId, orgId, role } = req.user;
+  // F-018: files the upload step already stored are removed again when the message is refused, so nothing is left behind.
+  const refuse = async (status, error) => { await Promise.all((req.files ?? []).map((f) => fileStore.remove(f.stored?.url))); return res.status(status).json({ error }); };
   const channel = await ChatChannel.findById(req.params.id).lean();
-  if (!channel) return res.status(404).json({ error: "Channel not found." });
-  if (!(await isMember(channel, userId, role, orgId))) return res.status(403).json({ error: "Not a member." });
+  if (!channel) return refuse(404, "Channel not found.");
+  if (!(await isMember(channel, userId, role, orgId))) return refuse(403, "Not a member.");
 
   // Permission check: sendMessages (announcement = admins + granted posters)
   const legacyPostRoles = channel.postRoles ?? [];
   if (!R.canSend(channel, { id: userId, role })) {
-    return res.status(403).json({ error: "Only admins can send messages in this group." });
+    return refuse(403, "Only admins can send messages in this group.");
   }
   // Legacy postRoles check
   if (legacyPostRoles.length && !legacyPostRoles.includes(role)) {
-    return res.status(403).json({ error: "You do not have posting permission in this channel." });
+    return refuse(403, "You do not have posting permission in this channel.");
   }
 
-  const { content, clientId, mentions = [] } = req.body;
-  if (!content?.trim() && !req.body.attachments?.length) return res.status(400).json({ error: "Message cannot be empty." });
-  if ((content?.length ?? 0) > 2000) return res.status(400).json({ error: "Message too long (max 2000 chars)." });
+  if (tooFast(userId)) return refuse(429, "Slow down: too many messages in a few seconds.");
+  const { content, clientId, mentions } = readSendBody(req.body);
+  const attachments = chatAttachmentsFrom(req.files);
+  if (typeof content !== "string") return refuse(400, "Message must be text.");
+  if (!content.trim() && !attachments.length) return refuse(400, "Message cannot be empty.");
+  if (content.length > 2000) return refuse(400, "Message too long (max 2000 chars).");
 
   if (clientId) {
     const dup = await ChatMessage.findOne({ channelId: channel._id, clientId }).lean();
-    if (dup) return res.json(dup);
+    if (dup) { await Promise.all((req.files ?? []).map((f) => fileStore.remove(f.stored?.url))); return res.json(dup); } // same send again: the first message stands
   }
 
-  const mentionOids = (mentions ?? []).filter(Boolean).map(toOid);
+  const mentionOids = [...new Set((mentions ?? []).filter((m) => typeof m === "string" && /^[0-9a-f]{24}$/i.test(m)))].slice(0, 20).map(toOid); // bad ids are ignored, never a 500
   const msg = await ChatMessage.create({
     orgId:     toOid(orgId),
     channelId: channel._id,
     sender:    toOid(userId),
-    content:   content?.trim() ?? "",
+    content:   content.trim(),
     clientId:  clientId ?? null,
     mentions:  mentionOids,
+    attachments,
     readBy:    [toOid(userId)],
   });
 
@@ -163,17 +181,12 @@ export async function sendMessage(req, res) {
     .populate("mentions", "name role")
     .lean();
 
-  for (const mOid of mentionOids) {
-    if (mOid.toString() === userId) continue;
-    await Notification.create({
-      userId: mOid, orgId,
-      type: "system", tier: "needs_action",
-      title:   "You were mentioned",
-      message: `${populated.sender?.name ?? "Someone"} mentioned you in #${channel.name}`,
-      deepLink: `/chat/${channel._id}`,
-    }).catch(() => {});
-  }
+  // Item 77 (D-546): a DM tells the other person, an @mention tells the member mentioned, a plain group message tells nobody.
+  await notifyChat({ channel, message: populated, senderId: userId, senderName: populated.sender?.name, mentionIds: mentionOids, orgId });
 
+  // Everyone with the conversation open gets it live (the socket path did this; the REST path did not). The sender's own page
+  // skips it by clientId.
+  getIo()?.to(`chat:${String(channel._id)}`).emit("chat:new_message", populated);
   res.status(201).json(populated);
 }
 
@@ -232,6 +245,7 @@ export async function markRead(req, res) {
     { channelId: channel._id, readBy: { $ne: toOid(userId) } },
     { $addToSet: { readBy: toOid(userId) } }
   );
+  await markChatNoticesRead(userId, channel._id); // item 77: reading it clears its bell notices too
   res.json({ ok: true });
 }
 
@@ -485,7 +499,7 @@ export async function getOrCreateDm(req, res) {
   const meOid   = toOid(userId);
   const themOid = toOid(targetId);
 
-  const target = await User.findOne({ _id: themOid, orgId, status: { $ne: "deleted" } }, "name role").lean();
+  const target = await User.findOne({ _id: themOid, orgId, status: { $ne: "deleted" } }, "name role avatarStyle avatarSeed").lean();
   if (!target) return res.status(404).json({ error: "User not found." });
 
   let channel = await ChatChannel.findOne({
@@ -504,7 +518,7 @@ export async function getOrCreateDm(req, res) {
     });
   }
 
-  res.json({ channel, target });
+  res.json({ channel: { ...channel.toObject(), dm: { _id: String(target._id), name: target.name, role: target.role, avatarStyle: target.avatarStyle, avatarSeed: target.avatarSeed } }, target }); // item 76: named from the first moment
 }
 
 // ── GET /api/chat/users — search org users ───────────────────────────────────
@@ -515,9 +529,9 @@ export async function searchUsers(req, res) {
   // S10 (D-167): only leads see and search by email.
   const fields = coworkerFields(req.user.role);
   const users = await User.find(
-    { orgId, status: { $ne: "deleted" }, $or: [{ name: { $regex: q, $options: "i" } }, ...(fields.includes("email") ? [{ email: { $regex: q, $options: "i" } }] : [])] },
+    { orgId, _id: { $ne: req.user.id }, status: { $ne: "deleted" }, $or: [{ name: { $regex: q, $options: "i" } }, ...(fields.includes("email") ? [{ email: { $regex: q, $options: "i" } }] : [])] },
     fields.replace(" department", "")
-  ).limit(10).lean();
+  ).limit(30).lean(); // items 73/74: never yourself; 30 so prefix matches are not cut off before the client ranks them
   res.json(users);
 }
 

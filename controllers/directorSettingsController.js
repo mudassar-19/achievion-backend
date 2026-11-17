@@ -3,6 +3,7 @@ import AuditLog     from "../models/AuditLog.js";
 import User         from "../models/User.js";
 import { validateAlertRules } from "../services/alertRules.js";
 import { mergeSettings } from "../utils/mergeSettings.js";
+import { readHolidays } from "../services/workloadRules.js";
 
 const IS_OBJECT_ID = /^[0-9a-f]{24}$/i;
 function orgFilter(orgId) {
@@ -62,7 +63,7 @@ export async function getSettings(req, res) {
 
   res.json({
     name:                 org.name,
-    workingTime:          { hoursPerDay: wt.hoursPerDay ?? 7, workingDays, timezone: wt.timezone ?? "Asia/Karachi" },
+    workingTime:          { hoursPerDay: wt.hoursPerDay ?? 7, workingDays, timezone: wt.timezone ?? "Asia/Karachi", holidays: readHolidays(wt.holidays) },
     extensionRules:       org.extensionRules        ?? { extensionMaxDays: 3, extensionMaxPct: 20, extensionCumCapPct: 20 },
     alertSettings:        org.alertSettings         ?? {},
     aiSettings: {
@@ -100,6 +101,15 @@ async function validateSettings(body, cur, orgId) {
       else if (!wd.every((d) => Number.isInteger(d) && d >= 0 && d <= 6)) f["workingTime.workingDays"] = "Working days must be weekday numbers from 0 (Sunday) to 6 (Saturday).";
     }
     if (workingTime.timezone !== undefined && !validTimezone(workingTime.timezone)) f["workingTime.timezone"] = "Choose a valid time zone.";
+    // F-001: holidays are real calendar dates "YYYY-MM-DD", at most 60, no duplicates.
+    if (workingTime.holidays !== undefined) {
+      const h = workingTime.holidays;
+      const real = (s) => typeof s === "string" && /^\d{4}-\d{2}-\d{2}$/.test(s) && new Date(`${s}T00:00:00Z`).toISOString().slice(0, 10) === s;
+      if (!Array.isArray(h)) f["workingTime.holidays"] = "Holidays must be a list of dates.";
+      else if (h.length > 60) f["workingTime.holidays"] = "At most 60 holidays.";
+      else if (!h.every(real)) f["workingTime.holidays"] = "Every holiday must be a real date (YYYY-MM-DD).";
+      else if (new Set(h).size !== h.length) f["workingTime.holidays"] = "A holiday is listed twice.";
+    }
   }
 
   if (isPlain(extensionRules)) {

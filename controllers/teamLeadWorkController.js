@@ -20,7 +20,7 @@ import { LIMIT_TYPE } from "../services/reviewRules.js";
 import { getAlerts, getActivity } from "./teamLeadController.js";
 import { createNotification } from "./notificationController.js";
 import { healthForProjects } from "../services/projectHealthService.js";
-import { moduleProgressByIds, pct } from "../services/moduleProgress.js";
+import { moduleProgressByIds, applyTaskProgress, pct } from "../services/moduleProgress.js";
 import { capture, passOn } from "../utils/capture.js";
 import { teamOf, parseTaskQuery, moduleState, TASK_PAGE, QUESTION_MAX } from "../services/teamLeadRules.js";
 import { canDeleteTask, isBlocked } from "../services/taskFormRules.js";
@@ -124,6 +124,7 @@ export async function getModule(req, res) {
   if (req.query.module) {
     mod = valid(req.query.module) ? await Milestone.findOne({ _id: req.query.module, projectId: p._id, teamLeadId: req.user.id }).lean() : null;
     if (!mod) return res.status(404).json({ error: "Module not found in your projects." });
+    await applyTaskProgress([mod]); // QA2-64: the Completed chip reads the task-based progress
   }
   const [tasks, health, wl] = await Promise.all([
     Task.find({ ...s.scope.filter, projectId: p._id, ...(mod && (await Task.exists({ milestoneId: mod._id })) ? { milestoneId: mod._id } : {}) }, "title type status priority deadline startDate createdAt estimatedHours assignee assignees isLate dependsOn")

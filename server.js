@@ -22,6 +22,7 @@ import gamificationRoutes                  from "./routes/gamificationRoutes.js"
 import approvalRoutes                          from "./routes/approvalRoutes.js";
 import chatRoutes                              from "./routes/chatRoutes.js";
 import communityRoutes                        from "./routes/communityRoutes.js";
+import announcementRoutes                      from "./routes/announcementRoutes.js";
 import teamRoutes                              from "./routes/teamRoutes.js";
 import teamLeadRoutes                         from "./routes/teamLeadRoutes.js";
 import workspaceRoutes                        from "./routes/workspaceRoutes.js"; // E-2 (D-174)
@@ -56,6 +57,7 @@ import { snapshotAllOrgs } from "./services/reportService.js";
 import { startWeeklySummaryScheduler }     from "./jobs/weeklySummaryScheduler.js";
 import { flagStaleSuspensions }            from "./controllers/emergencySuspendController.js";
 import { seedCommunities }                 from "./migrations/seedCommunities.js";
+import { notifyChat }                      from "./services/chatNotify.js";
 
 // ── Startup guard ─────────────────────────────────────────────────────────────
 if (!process.env.JWT_SECRET) {
@@ -179,15 +181,9 @@ io.on("connection", (socket) => {
       io.to(`chat:${channelId}`).emit("chat:new_message", populated);
       socket.emit("chat:message_saved", populated);
 
-      // Push mention notifications via socket
-      for (const mId of mentionOids) {
-        if (String(mId) === userId) continue;
-        io.to(`user:${mId}`).emit("notification:new", {
-          type:    "mention",
-          message: `${socket.data.name ?? "Someone"} mentioned you in #${ch.name}`,
-          deepLink: `/chat/${channelId}`,
-        });
-      }
+      // Item 77 (D-546): same rule as the REST path: a DM tells the other person, an @mention tells the member mentioned (saved, so the
+      // bell and its count survive a reload); a plain group message tells nobody.
+      await notifyChat({ channel: ch, message: populated, senderId: userId, senderName: populated.sender?.name ?? socket.data.name, mentionIds: mentionOids, orgId });
     } catch (err) {
       socket.emit("chat:error", { message: err.message });
     }
@@ -328,6 +324,7 @@ app.use("/api/gamification",  gamificationRoutes);
 app.use("/api/approvals",     approvalRoutes);
 app.use("/api/chat",          chatRoutes);
 app.use("/api/communities",   communityRoutes);
+app.use("/api/announcements", announcementRoutes); // items 79, 80
 app.use("/api/teams",         teamRoutes);
 app.use("/api/teamlead",      teamLeadRoutes);
 app.use("/api/workspace",     workspaceRoutes);

@@ -7,6 +7,7 @@ import GamificationProfile from "../models/GamificationProfile.js";
 import ChatChannel       from "../models/ChatChannel.js";
 import { getIo }         from "../utils/io.js";
 import { isEmployee, isTeamMember } from "../services/accessRules.js";
+import { firstLengthError } from "../services/textLimits.js";
 
 // ── POST /api/teams ────────────────────────────────────────────────────────────
 export async function createTeam(req, res) {
@@ -15,6 +16,8 @@ export async function createTeam(req, res) {
 
   const { name, description, department, capacity, teamLeadId } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: "Team name required" });
+  const tooLong = firstLengthError([["Team name", name, "team"], ["Description", description, "description"]]); // QA2-21
+  if (tooLong) return res.status(400).json({ error: tooLong });
 
   const exists = await Team.findOne({ orgId: req.user.orgId, name: name.trim() });
   if (exists) return res.status(400).json({ error: "Team name already exists in this organization" });
@@ -376,6 +379,8 @@ export async function updateTeam(req, res) {
     return res.status(403).json({ error: "Only Manager or Director can update teams" });
 
   const { name, description, department, capacity, status } = req.body;
+  const tooLong = firstLengthError([["Team name", name, "team"], ["Description", description, "description"]]); // QA2-21
+  if (tooLong) return res.status(400).json({ error: tooLong });
 
   // Build update object — only include defined fields
   const $set = {};

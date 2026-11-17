@@ -90,6 +90,17 @@ import { validateTaskAssignment, ROLE_TO_CATEGORY, ROLE_TASK_ELIGIBILITY } from 
 import { orgScope } from "./managerProjectsController.js";
 import { startInPast } from "../services/startDateRules.js";
 import { subtaskHoursError, parentHoursError } from "../services/subtaskHours.js";
+import { timeLogLock, executionLock, alreadySubmitted } from "../services/taskLocks.js";
+import Milestone from "../models/Milestone.js";
+
+// QA2-68/69: planning is allowed; start, time log and submit wait for the started project and the accepted module.
+async function executionBlock(task) {
+  const [project, milestone] = await Promise.all([
+    task.projectId ? Project.findById(task.projectId, "status").lean() : null,
+    task.milestoneId ? Milestone.findById(task.milestoneId, "status tlAcceptedAt").lean() : null,
+  ]);
+  return executionLock({ project, milestone });
+}
 
 // S-1 (D-158): router.param guard for employees on /api/tasks/:id*.
 export async function employeeTaskScope(req, res, next) {
@@ -565,6 +576,12 @@ export async function updateTaskStatus(req, res) {
   // D-176 (E-3): same status → nothing to do (before: Done → Done re-saved, moved completedAt and re-sent task.approved).
   if (isNoOpStatus(task.status, status)) return res.json({ success: true, task, unchanged: true });
 
+  // QA2-68/69: starting or submitting waits for the started project / accepted module (planning moves stay free)
+  if ((status === "In-Progress" && ["Backlog", "To-Do"].includes(task.status)) || status === "In-Review") {
+    const notStarted = await executionBlock(task);
+    if (notStarted) return res.status(409).json({ error: notStarted.message, code: notStarted.code });
+  }
+
   // V1 1.9: can't start (or submit) while a prerequisite is unfinished
   if ((status === "In-Progress" && ["Backlog", "To-Do"].includes(task.status)) || status === "In-Review") {
     const blocking = await blockingPrereqs(task);
@@ -631,9 +648,13 @@ export async function submitTask(req, res) {
     return res.status(403).json({ error: "Only the assignee can submit this task" });
   }
 
+  // QA2-72: already waiting for review = the first request worked; answer success so the screen shows no false error.
+  if (alreadySubmitted(task)) return res.json({ message: "Task submitted for review", isLate: Boolean(task.isLate), alreadySubmitted: true });
   if (!["To-Do", "In-Progress"].includes(task.status)) {
     return res.status(400).json({ error: "Task cannot be submitted in current status" });
   }
+  const notStarted = await executionBlock(task); // QA2-68/69: project still Planning or module not accepted
+  if (notStarted) return res.status(409).json({ error: notStarted.message, code: notStarted.code });
   const blocking = await blockingPrereqs(task); // V1 1.9
   if (blocking.length) {
     return res.status(409).json({ error: `Finish the prerequisites first: ${blocking.map((t) => `"${t.title}"`).join(", ")}.`, blockedBy: blocking });
@@ -688,6 +709,7 @@ export async function submitTask(req, res) {
     submissionLinks: links,
     submissionContent:   content,
     submissionChecklist: checklist,
+    submissionAiAssisted: req.body.aiAssisted === true || req.body.aiAssisted === "true", // F-066 (declared, advice only)
     submissionHandoff:   String(req.body.handoff ?? "").trim().slice(0, 1000), // E-3b (D-185): handed to the linked dev task on approval
     aiEval:          null,
     aiScore:         null,
@@ -699,7 +721,7 @@ export async function submitTask(req, res) {
     ...(attemptDelta("resubmit") ? { $inc: { resubmissionCount: attemptDelta("resubmit") } } : {}),
   });
   // ponytail: the losing request's files stay in storage (no cleanup); the 5-file / 10 MB limit bounds it.
-  if (!claimed) return res.status(409).json({ error: "This task was just submitted. Open it to see the submission." });
+  if (!claimed) return res.json({ message: "Task submitted for review", isLate, alreadySubmitted: true }); // QA2-72: lost the race to our own twin request
   Task.logActivity(task._id, userId, "submitted", { from: task.status, to: "In-Review", note: isLate ? "late" : "" });
 
   // D-182 → D-184 (E-3b): the task's own Team Leads (module, else project), else the project's Manager; plus a Senior of the
@@ -1154,6 +1176,10 @@ export async function logTime(req, res) {
 
   const task = await Task.findOne({ _id: req.params.id, orgId: req.user.orgId });
   if (!task) return res.status(404).json({ error: "Task not found." });
+  const locked = timeLogLock(task); // QA2-71: no time on a task in review or done
+  if (locked) return res.status(409).json({ error: locked.message, code: locked.code });
+  const notStarted = await executionBlock(task); // QA2-68/69
+  if (notStarted) return res.status(409).json({ error: notStarted.message, code: notStarted.code });
 
   // Only people working on the task log time on it.
   const uid = String(req.user.id);
