@@ -607,6 +607,11 @@ export async function getAuditLog(req, res) {
     AuditLog.countDocuments(query),
   ]);
 
+  // QA3 G-15: performedBy is a Mixed field, so populate() cannot read it. Resolve the people who acted here, so every row names its actor.
+  const actorIds = [...new Set(logs.map((l) => l.performedBy).filter((v) => v && /^[0-9a-f]{24}$/i.test(String(v))).map(String))];
+  const actors = new Map((await User.find({ _id: { $in: actorIds } }, "name role").lean()).map((u) => [String(u._id), u]));
+  for (const l of logs) { const a = actors.get(String(l.performedBy)); if (a) l.performedBy = a; }
+
   const mapped = logs.map((l) => ({
     id:            l._id,
     action:        l.action,
