@@ -106,7 +106,7 @@ const taskSchema = new Schema(
     tlScore: { type: Number, min: 0, max: 100, default: null }, // final score (D-063); stars = scoreToStars
     // Manager Flags (spec §5, D-076). ai_tl_disagreement at review; xp_outlier / rubber_stamp / burst at XP award (M-5).
     reviewFlags: [{
-      kind:      { type: String, enum: ["ai_tl_disagreement", "xp_outlier", "rubber_stamp", "burst"], required: true },
+      kind:      { type: String, enum: ["ai_tl_disagreement", "xp_outlier", "rubber_stamp", "burst", "reassign_churn"], required: true },
       aiScore:   Number,
       tlScore:   Number,
       gap:       Number,
@@ -241,6 +241,9 @@ const taskSchema = new Schema(
       },
     ],
 
+    // QA4 Y-7: every reassign (Team Lead only), and the optional XP handover share to the previous assignee (0-50 %).
+    reassignments: [{ from: { type: Types.ObjectId, ref: "User" }, to: { type: Types.ObjectId, ref: "User" }, by: { type: Types.ObjectId, ref: "User" }, reason: String, loggedHours: Number, sharePct: { type: Number, default: 0 }, at: { type: Date, default: Date.now }, _id: false }],
+    handover: { type: new Schema({ fromUserId: { type: Types.ObjectId, ref: "User" }, sharePct: { type: Number, min: 0, max: 50 }, reason: String, by: { type: Types.ObjectId, ref: "User" }, at: Date }, { _id: false }), default: null },
     timeLogs: [
       {
         user:     { type: Types.ObjectId, ref: "User" },

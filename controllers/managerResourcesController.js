@@ -25,7 +25,7 @@ const CLOSED = ["Archived", "Deleted"];
 const valid = (id) => mongoose.isValidObjectId(id) && /^[0-9a-f]{24}$/i.test(String(id));
 
 async function scopeOr404(req, res) {
-  const scope = await orgScope(req.user.orgId);
+  const scope = await orgScope(req.user.orgId, req.user);
   if (!scope) res.status(404).json({ error: "Organization not found." });
   return scope;
 }
@@ -49,20 +49,22 @@ async function alertIfOver(req, snaps, threshold) {
   const sent = await Notification.find({ userId: req.user.id, type: "workload_over_limit", createdAt: { $gte: since } }, "meta").lean();
   const done = new Set(sent.map((n) => String(n.meta?.memberId)));
   for (const s of over.filter((x) => !done.has(String(x.userId)))) {
-    await createNotification({ userId: req.user.id, orgId: req.user.orgId, type: "workload_over_limit", title: "Someone is over their limit",
-      message: `${s.name} is at ${loadLabel(s.utilisation)} of daily capacity (your limit is ${threshold}%).`, meta: { memberId: String(s.userId) } }).catch(() => {});
+    await createNotification({ userId: req.user.id, orgId: req.user.orgId, type: "workload_over_limit", title: `${s.name} is over capacity`, // QA4 M-16: the name in the title, a real sentence, the same number as everywhere
+      message: `${s.name} is at ${Math.round(s.utilisation)}% of daily capacity (your limit is ${threshold}%).`, meta: { memberId: String(s.userId) } }).catch(() => {});
   }
 }
 
 // Workload rows for people in the org (or only `userIds`, for a Team Lead's team) — same numbers as Resources.
 // seenBy: the viewer ({ role, viewAs }) when the roster may show last seen (X17); without it the field is not sent at all.
 export async function workloadView(scope, viewerId, { userIds = null, projectIds = null, seenBy = null } = {}) {
+  // QA4 D-QA4-8: a Manager's people = the people on the projects they manage
+  if (!userIds && scope.pfilter.managerId) userIds = [...new Set((await Project.find(scope.pfilter, "members").lean()).flatMap((pr) => (pr.members ?? []).map(String)))];
   const users = await User.find({ ...scope.filter, status: { $ne: "deleted" }, role: { $nin: LEADERS }, ...(userIds ? { _id: { $in: userIds } } : {}) }, "_id lastSeenAt").lean();
   const seenAt = new Map(users.map((u) => [String(u._id), u.lastSeenAt ?? null]));
   const workTime = orgWorkTime(scope.org);
   const [snaps, projects, threshold] = await Promise.all([
     getBulkWorkloadSnapshots(users.map((u) => u._id), { workTime }),
-    Project.find({ ...scope.filter, isDeleted: { $ne: true }, status: { $nin: CLOSED }, ...(projectIds ? { _id: { $in: projectIds } } : {}) }, "title members").sort({ title: 1 }).lean(),
+    Project.find({ ...scope.pfilter, isDeleted: { $ne: true }, status: { $nin: CLOSED }, ...(projectIds ? { _id: { $in: projectIds } } : {}) }, "title members").sort({ title: 1 }).lean(),
     thresholdOf(scope, viewerId),
   ]);
   const projectsOf = (uid) => projects.filter((p) => (p.members ?? []).some((m) => String(m) === String(uid))).map((p) => String(p._id));
@@ -132,7 +134,7 @@ async function loadTask(req, res, scope) {
   if (!valid(req.params.id)) { res.status(404).json({ error: "Task not found." }); return null; }
   const task = await Task.findOne({ _id: req.params.id, ...scope.filter }, "title status type assignee assignees projectId estimatedHours difficulty startDate deadline endDate").lean();
   if (!task) { res.status(404).json({ error: "Task not found." }); return null; }
-  const project = task.projectId ? await Project.findOne({ _id: task.projectId, ...scope.filter }, "title members").lean() : null;
+  const project = task.projectId ? await Project.findOne({ _id: task.projectId, ...scope.pfilter }, "title members").lean() : null;
   return { task, project };
 }
 const fromOf = (task, id) => [task.assignee, ...(task.assignees ?? [])].filter(Boolean).map(String).find((x) => x === String(id)) ?? null;
@@ -206,17 +208,17 @@ export async function reassignTask(req, res) {
 // ── Assets (FR11-05) ─────────────────────────────────────────────────────────
 const assetOut = (a, titles) => ({ id: a._id, name: a.name, type: a.type, url: a.url, notes: a.notes, expiresAt: a.expiresAt, expiry: expiryState(a.expiresAt),
   projects: (a.projectIds ?? []).map((p) => ({ id: p, title: titles[String(p)] ?? "—" })).filter((p) => p.title !== "—"), updatedAt: a.updatedAt });
-const projectTitles = async (scope) => Object.fromEntries((await Project.find({ ...scope.filter, isDeleted: { $ne: true } }, "title").lean()).map((p) => [String(p._id), p.title]));
+const projectTitles = async (scope) => Object.fromEntries((await Project.find({ ...scope.pfilter, isDeleted: { $ne: true } }, "title").lean()).map((p) => [String(p._id), p.title]));
 async function projectsInOrg(scope, ids) {
   if (!ids?.length) return true;
-  return (await Project.countDocuments({ _id: { $in: ids }, ...scope.filter, isDeleted: { $ne: true } })) === ids.length;
+  return (await Project.countDocuments({ _id: { $in: ids }, ...scope.pfilter, isDeleted: { $ne: true } })) === ids.length;
 }
 
 export async function listAssets(req, res) {
   const scope = await scopeOr404(req, res); if (!scope) return;
   const [assets, titles] = await Promise.all([Asset.find(scope.filter).sort({ name: 1 }).lean(), projectTitles(scope)]);
   res.json({ assets: assets.map((a) => assetOut(a, titles)),
-    projects: (await Project.find({ ...scope.filter, isDeleted: { $ne: true }, status: { $nin: CLOSED } }, "title").sort({ title: 1 }).lean()).map((p) => ({ id: p._id, title: p.title })) });
+    projects: (await Project.find({ ...scope.pfilter, isDeleted: { $ne: true }, status: { $nin: CLOSED } }, "title").sort({ title: 1 }).lean()).map((p) => ({ id: p._id, title: p.title })) });
 }
 
 export async function createAsset(req, res) {
@@ -257,7 +259,7 @@ export async function deleteAsset(req, res) {
 
 // Project detail → Assets tab: linked assets + link / unlink.
 async function projectOr404(req, res, scope) {
-  const p = valid(req.params.id) ? await Project.findOne({ _id: req.params.id, ...scope.filter, isDeleted: { $ne: true } }, "title").lean() : null;
+  const p = valid(req.params.id) ? await Project.findOne({ _id: req.params.id, ...scope.pfilter, isDeleted: { $ne: true } }, "title").lean() : null;
   if (!p) res.status(404).json({ error: "Project not found." });
   return p;
 }

@@ -64,5 +64,17 @@ function uptime(stress) {
     target: T.source, targetPct: T.pct, targetMinutes: T.minutes };
 }
 
-export const buildSuccessMetrics = ({ surveys, aiCases, perfRows, stress }) =>
-  ({ satisfaction: satisfaction(surveys), ai: ai(aiCases), speed: speed(perfRows), uptime: uptime(stress) });
+export const buildSuccessMetrics = ({ surveys, aiCases, perfRows, stress, aiPairs = [] }) =>
+  ({ satisfaction: satisfaction(surveys), ai: ai(aiCases), efficiency: aiAgreement(aiPairs), speed: speed(perfRows), uptime: uptime(stress) });
+
+// QA4 D-QA4-13: the proposal's "80% efficiency" = the AI evaluation is acceptable: within 20 points of the Team Lead (or Director) score,
+// on at least 30 evaluated cases. Shown on Success Metrics; the Manager profile's old "Efficiency" is now called "Decision speed".
+export const EFFICIENCY = { cases: 30, withinPoints: 20, passPct: 80, source: "Proposal: AI features at least 80% efficiency. Measured as the share of AI evaluations within 20 points of the Team Lead's score (RND-06 gap rule) over at least 30 cases." };
+export function aiAgreement(pairs = []) {
+  const ok = pairs.filter((p) => p.aiScore != null && p.tlScore != null), n = ok.length;
+  const base = { n, needed: EFFICIENCY.cases, withinPoints: EFFICIENCY.withinPoints, progress: `${Math.min(n, EFFICIENCY.cases)} of ${EFFICIENCY.cases} evaluated cases`, target: EFFICIENCY.source };
+  if (!n) return { ...base, status: "NO DATA", withinPct: null };
+  const withinPct = Math.round((ok.filter((p) => Math.abs(p.aiScore - p.tlScore) <= EFFICIENCY.withinPoints).length / n) * 100);
+  if (n < EFFICIENCY.cases) return { ...base, status: "IN PROGRESS", withinPct };
+  return { ...base, status: withinPct >= EFFICIENCY.passPct ? "VERIFIED" : "NOT VERIFIED", withinPct };
+}

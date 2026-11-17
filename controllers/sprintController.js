@@ -11,7 +11,7 @@ import { orgScope, audit } from "./managerProjectsController.js";
 import {
   PAGE_SIZE, ACTIVE_STATUSES, OPEN_STATUSES, STATUS_FILTER, statusLabel, validateSprintInput, overlappingSprints,
   startBlockers, membershipUpdate, teamCapacity, estimatedHours, velocity, progressPct, daysLeft, sprintSummary,
-  parseSprintListQuery, canDeleteSprint, sprintNotifyList,
+  parseSprintListQuery, canDeleteSprint, sprintNotifyList, sprintRangeError, sprintProjectWarnings,
 } from "../services/sprintRules.js";
 
 import { startInPast } from "../services/startDateRules.js";
@@ -24,12 +24,12 @@ const TASK_FIELDS = "title type priority status xpValue estimatedHours deadline 
 // Sprint for :id in the caller's org (+ its project), or answers 404 and returns null.
 async function loadSprint(req, res) {
   if (!mongoose.isValidObjectId(req.params.id)) { res.status(404).json({ error: "Sprint not found." }); return null; }
-  const scope = await orgScope(req.user.orgId);
+  const scope = await orgScope(req.user.orgId, req.user);
   if (!scope) { res.status(404).json({ error: "Organization not found." }); return null; }
   const sprint = await Sprint.findOne({ _id: req.params.id, ...scope.filter });
   if (!sprint) { res.status(404).json({ error: "Sprint not found." }); return null; }
   const project = sprint.projectId
-    ? await Project.findOne({ _id: sprint.projectId, ...scope.filter, isDeleted: { $ne: true } }, "title status members managerId").populate("members", "name role status").lean()
+    ? await Project.findOne({ _id: sprint.projectId, ...scope.pfilter, isDeleted: { $ne: true } }, "title status members managerId").populate("members", "name role status").lean()
     : null;
   return { sprint, project, scope };
 }
@@ -50,9 +50,9 @@ const otherActive = (sprint) => Sprint.findOne({ projectId: sprint.projectId, st
 // ── GET /api/manager/sprints?status=Planned,Active&project=<id>&page=n ─────────
 export async function getSprints(req, res) {
   const q = parseSprintListQuery(req.query);
-  const scope = await orgScope(req.user.orgId);
+  const scope = await orgScope(req.user.orgId, req.user);
   if (!scope) return res.status(404).json({ error: "Organization not found." });
-  const projects = await Project.find({ ...scope.filter, isDeleted: { $ne: true }, status: { $nin: ["Deleted"] } }, "title status").sort({ title: 1 }).lean();
+  const projects = await Project.find({ ...scope.pfilter, isDeleted: { $ne: true }, status: { $nin: ["Deleted"] } }, "title status").sort({ title: 1 }).lean();
   const filter = { ...scope.filter, projectId: { $in: projects.map((p) => p._id) } };
   if (q.project.length) filter.projectId = { $in: q.project.filter((id) => projects.some((p) => String(p._id) === id)) };
   if (q.status.length) filter.status = { $in: q.status.flatMap((s) => STATUS_FILTER[s]) };
@@ -82,18 +82,20 @@ export async function getSprints(req, res) {
 export async function createSprint(req, res) {
   const { errors, value } = validateSprintInput(req.body, { mode: "create" });
   if (Object.keys(errors).length) return res.status(400).json({ error: Object.values(errors)[0], fields: errors });
-  const scope = await orgScope(req.user.orgId);
+  const scope = await orgScope(req.user.orgId, req.user);
   if (!scope) return res.status(404).json({ error: "Organization not found." });
   const past = startInPast(value.startDate, new Date(), scope.org.workingTime?.timezone); // item 50
   if (past) return res.status(400).json({ error: past, fields: { startDate: past } });
-  const project = await Project.findOne({ _id: value.projectId, ...scope.filter, isDeleted: { $ne: true } }, "title status").lean();
+  const project = await Project.findOne({ _id: value.projectId, ...scope.pfilter, isDeleted: { $ne: true } }, "title status startDate deadline").lean();
   if (!project) return res.status(400).json({ error: "Choose a project from your organization.", fields: { projectId: "Choose a project from your organization." } });
   if (CLOSED_PROJECT.includes(project.status)) return res.status(409).json({ error: `"${project.title}" is ${project.status.toLowerCase()}; restore it before planning sprints.` });
 
+  const rangeErr = sprintRangeError(value, project); // QA4 M-36
+  if (rangeErr) return res.status(400).json({ error: rangeErr, fields: { endDate: rangeErr } });
   const sprint = await Sprint.create({ ...value, projectId: project._id, status: "Planning", orgId: req.user.orgId, createdBy: req.user.id });
   const siblings = await Sprint.find({ projectId: project._id }, "name status startDate endDate").lean();
   audit(scope.org, req, project, "sprint_created", `Sprint "${sprint.name}" planned in "${project.title}".`);
-  res.status(201).json({ id: sprint._id, overlaps: overlappingSprints(siblings, { ...value, excludeId: sprint._id }).map((s) => s.name) });
+  res.status(201).json({ id: sprint._id, warnings: sprintProjectWarnings(project), overlaps: overlappingSprints(siblings, { ...value, excludeId: sprint._id }).map((s) => s.name) });
 }
 
 // ── GET /api/manager/sprints/:id ──────────────────────────────────────────────

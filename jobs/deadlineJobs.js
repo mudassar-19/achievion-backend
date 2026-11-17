@@ -105,6 +105,7 @@ export function startDeadlineJobs() {
   const run = (name, fn) => fn().then((n) => n && console.log(`[deadline] ${name}: ${n}`)).catch((e) => console.error(`[deadline] ${name}:`, e.message));
   cron.schedule("5 * * * *",  () => run("alerts", sendDeadlineAlerts));      // hourly
   cron.schedule("10 0 * * *", () => run("missed", chargeMissedDeadlines));   // daily 00:10, after the streak/HP cron
+  cron.schedule("30 * * * *", () => run("manager digest", sendManagerDigests)); // QA4 M-13: once per Manager per day (hourly check, deduped)
   cron.schedule("20 * * * *", () => run("flag reminders", remindStaleFlags)); // hourly: open review flags older than 3 days (QA3 G-16)
 }
 
@@ -122,6 +123,36 @@ export async function remindStaleFlags(now = new Date()) {
         message: `A flag on "${t.title}"${project.title ? ` (${project.title})` : ""} has waited ${flagAgeDays(f, now)} days for a decision.`, meta: { taskId: t._id } });
       sent++;
     }
+  }
+  return sent;
+}
+
+// QA4 M-13: ONE serious-items digest per Manager per day in the bell (overdue tasks, a sprint ending within 2 days with open tasks, open anomaly flags).
+// Switch: Settings > Notifications > "AI insights digest" (type ai_digest). Only the Manager's own projects count (D-QA4-8).
+export function digestText({ overdue = 0, sprints = [], flags = 0 }) {
+  const parts = [];
+  if (overdue) parts.push(`${overdue} overdue task${overdue === 1 ? "" : "s"}`);
+  for (const s of sprints) parts.push(`${s.name} ends in ${s.days} day${s.days === 1 ? "" : "s"} with ${s.open} open task${s.open === 1 ? "" : "s"}`);
+  if (flags) parts.push(`${flags} flag${flags === 1 ? "" : "s"} waiting for a second look`);
+  return parts.length ? `${parts.join("; ")}.` : null;
+}
+export async function sendManagerDigests(now = new Date()) {
+  const Sprint = (await import("../models/Sprint.js")).default, day = now.toISOString().slice(0, 10);
+  let sent = 0;
+  for (const m of await User.find({ role: "Manager", status: "active" }, "_id orgId").lean()) {
+    if (await Notification.exists({ userId: m._id, type: "ai_digest", "meta.day": day })) continue; // once a day
+    const projects = await Project.find({ managerId: m._id, isDeleted: { $ne: true }, status: { $nin: ["Completed", "Archived", "Deleted"] } }, "_id").lean(), pids = projects.map((p) => p._id);
+    if (!pids.length) continue;
+    const [overdue, sp, flagAgg] = await Promise.all([
+      Task.countDocuments({ projectId: { $in: pids }, status: { $nin: ["Done", "Cancelled"] }, deadline: { $lt: now, $ne: null } }),
+      Sprint.find({ projectId: { $in: pids }, status: "Active", endDate: { $gte: now, $lte: new Date(+now + 2 * 86_400_000) } }, "name endDate tasks").populate("tasks", "status").lean(),
+      Task.aggregate([{ $match: { projectId: { $in: pids }, "reviewFlags.0": { $exists: true } } }, { $unwind: "$reviewFlags" }, { $match: { "reviewFlags.status": "open" } }, { $count: "n" }]),
+    ]);
+    const sprints = sp.map((s) => ({ name: s.name, days: Math.max(0, Math.ceil((+new Date(s.endDate) - +now) / 86_400_000)), open: (s.tasks ?? []).filter((t) => t?.status !== "Done").length })).filter((s) => s.open > 0);
+    const text = digestText({ overdue, sprints, flags: flagAgg[0]?.n ?? 0});
+    if (!text) continue;
+    await Notification.create({ userId: m._id, orgId: String(m.orgId), type: "ai_digest", tier: "fyi", title: "Today's team digest", message: text, meta: { day }, deepLink: "/manager" });
+    sent++;
   }
   return sent;
 }

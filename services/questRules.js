@@ -162,3 +162,20 @@ export function countFrom(q) {
   const s = toDate(q.startDate), p = toDate(q.publishedAt);
   return s && p ? (p > s ? p : s) : s ?? p;
 }
+
+// ── QA4 M-37: economy guards (server side) ─────────────────────────────────────
+// A Manager's challenges stay inside the projects they manage; org-wide is the Director's. `own`: { projectIds, userIds } as strings.
+export function managerScopeError(body, own) {
+  // org-wide is the Director's, unless the Manager runs EVERY project of the organization (then their scope is the whole organization)
+  if (body.scope === "organisation" && !own.ownsAll) return "Only the Director can start an organization-wide challenge. Choose one of your projects or people.";
+  const id = body.scopeRef?.id ? String(body.scopeRef.id) : null;
+  if (body.scope === "project" && id && !own.projectIds.includes(id)) return "Choose one of your own projects.";
+  if (body.scope === "individual" && id && !own.userIds.includes(id)) return "Choose someone from your own projects.";
+  return null;
+}
+// Design choice (ASSUMPTION): a Manager can promise at most this much XP per week in total (reward XP x people), so rewards cannot inflate XP.
+export const MANAGER_WEEKLY_XP_BUDGET = 3000;
+export const weeklyBudgetUsed = (quests, now = new Date()) => quests.filter((q) => q.publishedAt && +now - +new Date(q.publishedAt) <= 7 * 86_400_000)
+  .reduce((s, q) => s + (q.rewardXp ?? 0) * (q.participants?.length ?? q.participants ?? 0), 0);
+// A legendary badge is too rare to be handed out by a challenge.
+export const rewardBadgeEligible = (rarity) => rarity !== "legendary";

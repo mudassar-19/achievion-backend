@@ -13,9 +13,9 @@ import { ROLE_CATEGORY_MAP } from "../models/User.js";
 // Manager's team = members of the projects they manage (Project.managerId).
 // Team Lead's team = members of projects they are listed in (members array).
 async function teamOf(req) {
-  const scope = await orgScope(req.user.orgId);
+  const scope = await orgScope(req.user.orgId, req.user);
   if (!scope) return new Set();
-  const base = { ...scope.filter, isDeleted: { $ne: true }, status: { $nin: ["Archived", "Deleted"] } };
+  const base = { ...scope.pfilter, isDeleted: { $ne: true }, status: { $nin: ["Archived", "Deleted"] } };
   if (req.user.role === "Manager") {
     const projects = await Project.find({ ...base, managerId: req.user.id }, "members").lean();
     return new Set(projects.flatMap((p) => (p.members ?? []).map(String)));

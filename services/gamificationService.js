@@ -6,6 +6,7 @@ import User               from "../models/User.js";
 import Organization       from "../models/Organization.js";
 import AuditLog           from "../models/AuditLog.js";
 import { calculateTaskXP, levelFromTotalXp, crossedBurnout, lateAtSubmission, xpIncrement } from "./xpEngine.js";
+import { splitHandover } from "./flowRules.js";
 import { getIo }          from "../utils/io.js";
 import { reversalPlan }   from "./anomalyRules.js";
 import { orgWorkTime }    from "./workloadRules.js";
@@ -392,7 +393,9 @@ async function applyTaskApproved({ taskId, assignees, qualityScore = 3, approver
       task, submittedAt, isLate, qualityStars: qs,
       streakDays: profile.streaks?.daily ?? 0, orgRules,
     });
-    const xpEarned       = calc.finalXP;
+    // QA4 D-QA4-4: XP goes to whoever completes the task; an optional handover share (0-50 %, set by the Team Lead at reassign) goes to the previous assignee.
+    let xpEarned = calc.finalXP, handoverShare = 0;
+    if (task.handover?.sharePct > 0 && task.handover.fromUserId && String(task.handover.fromUserId) !== uid) { const sp = splitHandover(xpEarned, task.handover.sharePct); xpEarned = sp.final; handoverShare = sp.previous; }
     const goldEarned     = calc.gold;
     const hpDelta        = calc.hpDelta;
     const warningIssued  = false;
@@ -423,6 +426,7 @@ async function applyTaskApproved({ taskId, assignees, qualityScore = 3, approver
       }
       throw err;
     }
+    if (handoverShare > 0) await awardXp(task.handover.fromUserId, orgId, handoverShare, "handover_share", 0).catch((e) => console.error("[Gamification] handover share:", e.message));
     await AuditLog.create({
       action:       "xp_awarded",
       orgId:        profile.orgId ?? null,

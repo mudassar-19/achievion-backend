@@ -1,3 +1,4 @@
+import mongoose           from "mongoose";
 import User               from "../models/User.js";
 import { createNotification } from "./notificationController.js";
 import { orgLeaderIds } from "../services/chatService.js";
@@ -9,6 +10,11 @@ import Milestone          from "../models/Milestone.js";
 import Submission         from "../models/Submission.js";
 import GamificationProfile from "../models/GamificationProfile.js";
 import AuditLog           from "../models/AuditLog.js";
+import { effectiveThreshold } from "../services/resourceRules.js";
+import { loadRenames, applyRenames } from "../services/propagation.js";
+import { riskFromBand } from "../services/healthScale.js";
+import { getAlertSettings } from "../services/alertRules.js";
+import { activityQuery, cleanDetail, auditSentence, whenText } from "../services/auditText.js";
 import Organization       from "../models/Organization.js";
 import ChatChannel        from "../models/ChatChannel.js";
 import ChatCommunity     from "../models/ChatCommunity.js";
@@ -175,6 +181,9 @@ export async function getTeamWorkload(req, res) {
 }
 
 // ── GET /api/manager/projects ─────────────────────────────────────────────────
+// QA4 D-QA4-8: a Manager only ever reads the projects they manage.
+const mgrOnly = (req, f) => (req.user.role === "Manager" ? { $and: [f, { managerId: req.user.id }] } : f);
+
 export async function getProjects(req, res) {
   const { orgId } = req.user;
   const { search = "", status = "", priority = "", sort = "createdAt_desc" } = req.query;
@@ -188,7 +197,7 @@ export async function getProjects(req, res) {
     ? { orgId: ids[0] }
     : { $or: ids.map((id) => ({ orgId: id })) };
 
-  const projectFilter = { ...orgQuery, isDeleted: { $ne: true } };
+  const projectFilter = { ...orgQuery, isDeleted: { $ne: true }, ...(req.user.role === "Manager" ? { managerId: req.user.id } : {}) }; // QA4 D-QA4-8
   if (status)   projectFilter.status   = status;
   if (priority) projectFilter.priority = priority;
   if (search)   projectFilter.title    = { $regex: search, $options: "i" };
@@ -251,7 +260,7 @@ export async function getProjects(req, res) {
       xpPool:          p.xpPool          ?? 0,
       healthScore:     health.score,   // computed on read, never stored (D-077)
       healthBand:      health.band,
-      riskLevel:       p.riskLevel       ?? "Low",
+      riskLevel:       riskFromBand(health.band), // QA4 M-20: derived from the one health scale, never the stale stored value
       techStack:       p.techStack       ?? [],
       visibility:      p.visibility      ?? "team_only",
       managerId:       p.managerId?._id  ?? null,
@@ -632,14 +641,19 @@ export async function getWorkforce(req, res) {
   const weekAgo = new Date(now - 7 * 86_400_000);
 
   // Resolve org for project queries
-  const [org, members] = await Promise.all([ // one round instead of two (D-078)
-    Organization.findOne(orgFilterMgr(orgId), "_id orgId").lean(),
+  const [org, membersAll] = await Promise.all([ // one round instead of two (D-078)
+    Organization.findOne(orgFilterMgr(orgId), "_id orgId alertSettings workloadThresholdPct").lean(),
     User.find({ orgId, status: { $ne: "deleted" } }, "name email role department status avatarSeed joinedAt").lean(),
   ]);
   const orgIds = org ? [org._id.toString(), ...(org.orgId ? [org.orgId] : [])] : [orgId];
   const projectOrgFilter = orgIds.length === 1
     ? { orgId: orgIds[0] }
     : { $or: orgIds.map((id) => ({ orgId: id })) };
+  // QA4 D-QA4-8: a Manager's workforce = the people on the projects they manage
+  const ownPeople = req.user.role === "Manager" ? new Set((await Project.find({ ...projectOrgFilter, isDeleted: { $ne: true }, managerId: req.user.id }, "members").lean()).flatMap((pr) => (pr.members ?? []).map(String))) : null;
+  const members = ownPeople ? membersAll.filter((m) => ownPeople.has(String(m._id))) : membersAll;
+  // QA4 M-4 / M-10: Overloaded = above the limit, from the shared capacity numbers (1.0x is full, not over)
+  const limitPct = effectiveThreshold(getAlertSettings(org).overloadLimitPct, (await User.findById(req.user.id, "workloadThresholdPct").lean())?.workloadThresholdPct);
 
   const memberIds = members.map((m) => m._id);
 
@@ -668,7 +682,7 @@ export async function getWorkforce(req, res) {
     ).lean(),
 
     Project.find(
-      { ...projectOrgFilter, members: { $in: memberIds }, status: { $nin: ["Archived"] } },
+      { ...projectOrgFilter, ...(req.user.role === "Manager" ? { managerId: req.user.id } : {}), members: { $in: memberIds }, status: { $nin: ["Archived"] } },
       "title status members"
     ).lean(),
 
@@ -729,8 +743,8 @@ export async function getWorkforce(req, res) {
     const burnoutRiskLabel = wl?.burnoutRisk ?? null;
 
     let availability;
-    if (workloadTier === "Critical Overload" || bucket.inProgress >= 4 || hp < 30 || bucket.overdue >= 3) availability = "Overloaded";
-    else if (workloadTier === "Busy" || bucket.inProgress >= 2 || hp < 60 || bucket.overdue >= 1) availability = "Busy";
+    if (wl ? utilization > limitPct : (bucket.inProgress >= 4 || hp < 30)) availability = "Overloaded";
+    else if (workloadTier === "Busy" || utilization >= 80 || bucket.inProgress >= 2 || hp < 60 || bucket.overdue >= 1) availability = "Busy";
     else availability = "Available";
 
     // Burnout risk 0-100
@@ -926,7 +940,7 @@ export async function getProjectTimeline(req, res) {
     ? { orgId: orgIds[0], status: { $ne: "Archived" } }
     : { $and: [{ $or: orgIds.map((id) => ({ orgId: id })) }, { status: { $ne: "Archived" } }] };
 
-  const projects = await Project.find(pFilter)
+  const projects = await Project.find(mgrOnly(req, pFilter))
     .select("title status priority riskLevel healthScore startDate deadline")
     .lean();
 
@@ -1019,7 +1033,7 @@ export async function getReports(req, res) {
 
   const [members, projects] = await Promise.all([
     User.find({ orgId, status: "active" }, "_id name role department avatarSeed").lean(),
-    Project.find(pFilter).select("title status priority riskLevel healthScore deadline startDate").lean(),
+    Project.find(mgrOnly(req, pFilter)).select("title status priority riskLevel healthScore deadline startDate").lean(),
   ]);
 
   const memberIds  = members.map((m) => m._id);
@@ -1134,16 +1148,24 @@ export async function getActivityFeed(req, res) {
   const org = await Organization.findOne(orgFilterMgr(orgId), "_id").lean();
   if (!org) return res.json([]);
 
-  const logs = await AuditLog.find({ orgId: org._id })
+  // QA4 D-QA4-8 / M-39: a Manager sees their own actions and their own projects' events, never View as or organisation set-up; rows name the actor.
+  const projectIds = req.user.role === "Manager" ? (await Project.find({ orgId: { $in: [String(org._id), org.orgId].filter(Boolean) }, managerId: req.user.id }, "_id").lean()).map((x) => x._id) : [];
+  const logs = await AuditLog.find(activityQuery({ role: req.user.role, userId: [String(req.user.id), new mongoose.Types.ObjectId(req.user.id)], orgOid: org._id, projectIds }))
     .sort({ createdAt: -1 })
     .limit(limit)
     .lean();
+  const actorIds = [...new Set(logs.map((l) => l.performedBy).filter((v) => v && /^[0-9a-f]{24}$/i.test(String(v))).map(String))];
+  const actors = new Map((await User.find({ _id: { $in: actorIds } }, "name").lean()).map((u) => [String(u._id), u.name]));
+  const tz = (await Organization.findById(org._id, "workingTime.timezone").lean())?.workingTime?.timezone;
+  const renames = await loadRenames(org._id); // QA4 Y-2
 
   res.json(
     logs.map((l) => ({
       id:           l._id,
       action:       l.action,
-      detail:       l.detail,
+      detail:       applyRenames(cleanDetail(l.detail), renames),
+      sentence:     applyRenames(auditSentence({ action: l.action, performerName: actors.get(String(l.performedBy)) ?? null, projectTitle: l.projectTitle, oldRole: l.oldRole, newRole: l.newRole, detail: l.detail }), renames),
+      when:         whenText(l.createdAt, tz),
       projectTitle: l.projectTitle ?? null,
       projectId:    l.targetProjectId ?? null,
       oldRole:      l.oldRole ?? null,

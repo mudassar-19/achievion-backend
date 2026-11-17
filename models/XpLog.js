@@ -33,6 +33,8 @@ const xpLogSchema = new Schema(
         "assigner_bonus",
         // D6: Director manual XP adjustment
         "adjust",
+      // QA4 D-QA4-4: the optional handover share given to the person who started a reassigned task
+      "handover_share",
       ],
     },
 

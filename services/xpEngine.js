@@ -1,5 +1,6 @@
 // Pure XP engine — no DB, no I/O. Rules: docs/design/CURRENT_RULES.md + D-056/057/058/064/066.
 // Unit tests: server/tests/xpEngine.test.mjs (cd server && node --test).
+import { isOnTime } from "./onTimeRule.js";
 
 export const PRIORITY_BASE_XP = { Critical: 100, High: 75, Medium: 50, Low: 25 }; // D-066 fallback
 export const XP_VALUE_MIN = 10;
@@ -71,10 +72,10 @@ export function scoreToStars(score) {
 }
 
 // D-057: the first submission fixes lateness; later resubmissions keep it.
-export function lateAtSubmission(task, now = new Date()) {
+// QA4 D-QA4-7: "late" follows the one on-time rule (deadline = end of that day in the org zone, default Karachi); the -15% penalty (D-066) is unchanged.
+export function lateAtSubmission(task, now = new Date(), tz = "Asia/Karachi") {
   if (task?.firstSubmittedAt) return { firstSubmittedAt: task.firstSubmittedAt, isLate: Boolean(task.isLate) };
-  const deadline = task?.deadline ? new Date(task.deadline) : null;
-  return { firstSubmittedAt: now, isLate: deadline ? now > deadline : false };
+  return { firstSubmittedAt: now, isLate: task?.deadline ? isOnTime(task.deadline, now, tz) === false : false };
 }
 
 // 1.11b: the midnight cron judges the day that just ended. Mon-Fri only.

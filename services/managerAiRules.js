@@ -171,8 +171,14 @@ export function validateChat(obj, allowedSources) {
   const sources = Array.isArray(obj.sources) ? obj.sources : [];
   if (sources.length > 3 || !sources.every((k) => typeof k === "string" && Object.hasOwn(allowedSources, k))) return { ok: false, error: "sources" };
   if (!isNeutral(obj.answer)) return { ok: false, error: "wording" };
-  return { ok: true, value: { answer: clean(obj.answer), sources: [...new Set(sources)] } };
+  const refs = [...new Set((Array.isArray(obj.refs) ? obj.refs : []).filter((r) => typeof r === "string" && /^[mpst]\d{1,3}$/.test(r)))].slice(0, 8);
+  return { ok: true, value: { answer: clean(obj.answer), sources: [...new Set(sources)], refs } };
 }
+
+// QA4 M-1 / M-2: a person is never named in the answer text: their reference (m1) is removed, the cards show who it is.
+export const stripPeopleRefs = (text) => String(text).replace(/\s*\(?\bm\d{1,3}\b\)?,?/g, "").replace(/\s{2,}/g, " ").replace(/\s+([.,;])/g, "$1").trim();
+// refs the model listed -> cards, only for references that exist in the snapshot the server built (so ids are always from this org and role scope).
+export const entitiesFromRefs = (refs, cards) => refs.filter((r) => Object.hasOwn(cards, r)).map((r) => ({ ref: r, ...cards[r] }));
 
 const INSIGHT_KINDS = ["overload", "bottleneck", "deadline", "quality", "none"];
 export function validateInsight(obj, refs) {

@@ -7,6 +7,7 @@ const LEADS = [
   G("deadline_requests", "Deadline requests", "Requests to move a module or task deadline. They need your answer.", ["deadline_change_request", "extension_requested"], true),
   G("overload", "Someone over their limit", "A person on your projects goes above the workload limit or is at burnout risk.", ["workload_over_limit", "burnout_alert"]),
   G("sprint_events", "Sprint started or closed", "A sprint of your projects starts or closes.", ["sprint_started", "sprint_closed"]),
+  G("ai_digest", "AI insights digest", "One short daily note with the serious things: overdue tasks, a sprint about to end with open work, flags waiting.", ["ai_digest"]), // QA4 M-13
   G("mention", "Mentions", "Someone names you in a task comment or a chat.", ["mention"]),
   G("direct_messages", "Direct messages", "Someone sends you a direct message.", ["dm_message"]),
   G("decisions", "Approvals and decisions", "Things that wait for your decision.", ["approval_required", "needs_action", "manager_decision_required", "critical"], true),
@@ -15,7 +16,7 @@ const LEADS = [
 const DIRECTOR = [
   G("approval_pending", "Approval pending", "An account request waits for your decision.", ["approval_pending", "approval_required"], true),
   G("escalation", "Escalation raised", "Something was escalated to you.", ["escalation"], true),
-  G("project_at_risk", "Project at risk", "A project's health falls into At risk or Off track.", ["project_at_risk"]),
+  G("project_at_risk", "Project at risk", "A project's health falls below 60 (At risk).", ["project_at_risk"]),
   G("org_health_drop", "Org health drop", "The organisation health score drops.", ["org_health_drop"]),
   G("recap_ready", "Recap ready", "A weekly or monthly recap is ready to read.", ["recap_ready"]),
   G("mention", "Chat mentions", "Someone names you in a chat message.", ["mention"]), // QA3 B-20 (FR09-02): chat has its own switches

@@ -43,12 +43,13 @@ export function findBursts(approvals) {
 export const isAiTlDisagreement = isDisagreement;
 
 // ── M-5: Anomalies screen ────────────────────────────────────────────────────
-export const FLAG_KINDS = ["ai_tl_disagreement", "xp_outlier", "rubber_stamp", "burst", "director_xp_adjust"];
+export const FLAG_KINDS = ["ai_tl_disagreement", "xp_outlier", "rubber_stamp", "burst", "director_xp_adjust", "reassign_churn"];
 export const FLAG_LABEL = {
   ai_tl_disagreement: "AI and Team Lead scores differ",
   xp_outlier:         "XP far from this person's usual",
   rubber_stamp:       "Approved very quickly with 5 stars",
   burst:              "Many approvals in one hour",
+  reassign_churn:     "Task reassigned three or more times",
   director_xp_adjust: "Director XP adjustment flagged for review",
 };
 
@@ -59,6 +60,7 @@ export function flagReason(kind, ev = {}) {
   if (kind === "rubber_stamp") return ev.minutes < 1
     ? "The task got 5 stars within a minute of being submitted. This needs review."
     : `The task got 5 stars ${ev.minutes} minute${ev.minutes === 1 ? "" : "s"} after it was submitted. This needs review.`;
+  if (kind === "reassign_churn") return `This task was reassigned ${ev.count ?? 3} times. Look at the plan and the estimate. This needs review.`;
   if (kind === "burst") return `The same reviewer approved ${ev.count} of this person's tasks within one hour. This needs review.`;
   return "This award needs review.";
 }

@@ -26,6 +26,7 @@ const milestoneSchema = new Schema(
     activeRoles:   { type: [String], default: [] },
     assignedTeams: [{ type: Types.ObjectId, ref: "Team" }],
     teamLeadId:    { type: Types.ObjectId, ref: "User", default: null }, // M-2: one Team Lead per module
+    leadHistory:   [{ from: { type: Types.ObjectId, ref: "User" }, to: { type: Types.ObjectId, ref: "User" }, by: { type: Types.ObjectId, ref: "User" }, reason: String, at: { type: Date, default: Date.now }, _id: false }], // QA4 Y-6
     tlAcceptedAt:  { type: Date, default: null },                         // T-1: the Team Lead accepted the module (D-115)
     qaReadyAt:     { type: Date, default: null },                         // T-2: the Team Lead marked it ready for QA sign-off (D-122)
 

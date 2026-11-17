@@ -30,17 +30,17 @@ const startOfDay = (d = new Date()) => new Date(d.getFullYear(), d.getMonth(), d
 
 // Projects this person may see bugs and test cases of (Q3): members (and their Team Lead); a Manager the ones they manage; a Director all.
 async function visibleProjects(req) {
-  const scope = await orgScope(req.user.orgId);
+  const scope = await orgScope(req.user.orgId, req.user);
   if (!scope) return { scope: null, projects: [] };
-  const filter = { ...scope.filter, isDeleted: { $ne: true }, status: { $ne: "Deleted" } };
+  const filter = { ...scope.pfilter, isDeleted: { $ne: true }, status: { $ne: "Deleted" } };
   if (req.user.role === "Manager") filter.managerId = req.user.id;
   else if (req.user.role !== "Director") filter.members = req.user.id;
   return { scope, projects: await Project.find(filter, "title members managerId").lean() };
 }
 async function projectFor(req, projectId) {
   if (!valid(projectId)) return null;
-  const scope = await orgScope(req.user.orgId);
-  return scope ? Project.findOne({ _id: projectId, ...scope.filter }, "title members managerId").lean() : null;
+  const scope = await orgScope(req.user.orgId, req.user);
+  return scope ? Project.findOne({ _id: projectId, ...scope.pfilter }, "title members managerId").lean() : null;
 }
 const leadsOfProject = async (project) => (await User.find({ _id: { $in: project?.members ?? [] }, role: "Team Lead" }, "_id").lean()).map((u) => String(u._id));
 

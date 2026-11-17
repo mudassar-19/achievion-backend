@@ -36,6 +36,7 @@ export const VALID_ROLES = Object.keys(ROLE_CATEGORY_MAP).filter(
 // ── Schema ────────────────────────────────────────────────────────────────────
 const userSchema = new Schema(
   {
+    previousNames: [{ type: String }], // QA4 Y-2: old names of a renamed person; append-only text (audit sentences) is corrected on read
     name: {
       type:     String,
       required: [true, "Name is required"],

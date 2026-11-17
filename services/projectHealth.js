@@ -1,6 +1,7 @@
 // Project health, computed when read — never stored (D-077). Tests: server/tests/projectHealth.test.mjs.
 // expected% = elapsed / total time; behind = max(0, expected - progress%);
 // overdueRatio = overdue / open tasks; health = clamp(100 - behind - 50 * overdueRatio, 0, 100).
+import { projectBand } from "./healthScale.js";
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
 // U-1 (D-134, amends D-077): a project without any task is "Not started" — no score, never red, no health alert.
@@ -17,4 +18,4 @@ export function projectHealth({ startDate, deadline, now = new Date(), progressP
   return { score, band: healthBand(score), expectedPct: expectedPct === null ? null : Math.round(expectedPct), behind: Math.round(behind), overdueRatio, daysPastDeadline: daysPast };
 }
 
-export const healthBand = (score) => (score >= 70 ? "On track" : score >= 40 ? "At risk" : "Off track");
+export const healthBand = projectBand; // QA4 D-QA4-11: the one health scale (healthScale.js)

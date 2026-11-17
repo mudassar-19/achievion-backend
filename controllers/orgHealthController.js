@@ -16,7 +16,7 @@ export async function getOrgHealth(req, res) {
   res.json({
     overall: h.overall, status: h.status, subScores: h.subScores, factors: h.factors, present: h.present,
     weights: WEIGHTS, minSamples: MIN_SAMPLES, minFactors: MIN_FACTORS,
-    explain: h.explain, bands: { healthy: 75, attention: 50 }, // QA3 G-3 / G-5: points, band and inputs per factor
+    explain: h.explain, bands: { healthy: 75, attention: 60 }, // QA3 G-3 / G-5: points, band and inputs per factor
     assumptionNote: "Default weights: Delivery 35 / Capacity 25 / Risk control 20 / Quality 20. They are a design choice, checked by a sensitivity test whose result is under How is this calculated?",
   });
 }

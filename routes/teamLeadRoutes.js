@@ -1,4 +1,5 @@
 import * as tq from "../controllers/teamLeadRequestsController.js";
+import * as fl from "../controllers/flowsController.js";
 import { Router } from "express";
 import { aiConfigured } from "../services/aiChain.js";
 import * as tai from "../controllers/teamLeadAiController.js";
@@ -60,6 +61,11 @@ import { attachmentUpload } from "../middleware/upload.js";
 const router = Router();
 
 router.use(verifyToken, requireRole("Team Lead"));
+// QA4 Y-7: reassign is the Team Lead's (D-QA4-3); the Manager asks
+router.get("/reallocation-requests",               fl.listForTeamLead);
+router.post("/reallocation-requests/:id/decline",  fl.declineRequest);
+router.get("/tasks/:id/reassign/preview",          fl.reassignPreview);
+router.post("/tasks/:id/reassign",                 fl.reassign);
 
 // ── T-1 (V2 Phase 4, D-113..D-116): home, modules, task list/detail, team + reassign, sprints read-only ──
 router.get("/home",                          tw.getHome);

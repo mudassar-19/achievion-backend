@@ -256,8 +256,8 @@ Glossary: velocity = XP of the done tasks; avgTlScore = average Team Lead score 
   });
   return {
     "mgr-chat": entry("mgr-chat", 700,
-      `Answer the Manager's question from the snapshot in <data> in at most 5 short sentences or 5 bullets ("- "). If the snapshot does not hold the answer, say so and name the screen that does. If asked to change something (assign, approve, delete, create), say you can't make changes and name the screen where the Manager can do it. "sources" lists 1-3 keys from data.sources that the answer is based on.`,
-      `{"answer":"...","sources":["dashboard"]}`,
+      `Answer the Manager's question from the snapshot in <data> in at most 5 short sentences or 5 bullets ("- "). If the snapshot does not hold the answer, say so and name the screen that does. If asked to change something (assign, approve, delete, create), say you can't make changes and name the screen where the Manager can do it. "sources" lists 1-3 keys from data.sources that the answer is based on. NEVER write a person's name, role or job title in the answer: say how many people ("3 people are over their daily capacity") and put their references (m1, m2...) in "refs" so the screen can show a card for each. Projects and sprints you may name by their reference too (p1, s1) in "refs".`,
+      `{"answer":"...","sources":["dashboard"],"refs":["m1","m2"]}`,
       () => true, // checked by validateChat with the context's sources (needs the request)
       (d) => `${data({ today: d.today, context: d.context, sources: d.sources, snapshot: d.snapshot, history: d.history })}\n<question>\n${safe(d.question)}\n</question>`),
     "mgr-insight": entry("mgr-insight", 500,

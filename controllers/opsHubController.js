@@ -1,4 +1,5 @@
 import { LIMIT_TYPE, limitDecision } from "../services/reviewRules.js";
+import { ATTENTION_FROM } from "../services/healthScale.js"; // QA4 D-QA4-11
 import { createNotification } from "./notificationController.js";
 import mongoose from "mongoose";
 import User                from "../models/User.js";
@@ -11,6 +12,12 @@ import AuditLog            from "../models/AuditLog.js";
 import GamificationProfile from "../models/GamificationProfile.js";
 import OperationalRequest  from "../models/OperationalRequest.js";
 import { healthForProjects } from "../services/projectHealthService.js";
+import { calendarDaysOver, alertableModule, severityForDays, SEVERITY_RULE, REVIEW_QUEUE_MIN, REVIEW_QUEUE_DAYS, overloadedList } from "../services/managerAlerts.js";
+import { activityQuery } from "../services/auditText.js";
+import { getBulkWorkloadSnapshots } from "../services/workloadService.js";
+import { orgWorkTime } from "../services/workloadRules.js";
+import { effectiveThreshold, loadLabel } from "../services/resourceRules.js";
+import { getAlertSettings } from "../services/alertRules.js";
 
 const IS_OID = /^[0-9a-f]{24}$/i;
 function orgFilterMgr(orgId) {
@@ -19,7 +26,7 @@ function orgFilterMgr(orgId) {
 
 // ── Resolve org IDs ─────────────────────────────────────────────────────────────
 async function resolveOrg(orgId) {
-  const org = await Organization.findOne(orgFilterMgr(orgId), "_id orgId").lean();
+  const org = await Organization.findOne(orgFilterMgr(orgId), "_id orgId workingTime alertSettings workloadThresholdPct").lean();
   if (!org) return null;
   const ids = [org._id.toString(), ...(org.orgId ? [org.orgId] : [])];
   const filter = ids.length === 1
@@ -44,8 +51,10 @@ export async function getOpsHub(req, res) {
   const { org, ids, filter: projectOrgFilter } = resolved;
 
   // ── Parallel base queries ─────────────────────────────────────────────────────
-  const [projects, pendingRequests, recentActivity, workforceMembers] = await Promise.all([
-    Project.find(projectOrgFilter,
+  // QA4 D-QA4-8: a Manager's Inbox is built from the projects they manage only.
+  const mine = req.user.role === "Manager";
+  const [projects, pendingRequests, recentActivityAll, workforceAll] = await Promise.all([
+    Project.find({ ...projectOrgFilter, isDeleted: { $ne: true }, ...(mine ? { managerId: req.user.id } : {}) },
       "_id title status riskLevel deadline members startDate createdAt priority"
     ).lean(),
 
@@ -68,7 +77,10 @@ export async function getOpsHub(req, res) {
     ).lean(),
   ]);
 
+  const ownPeople = new Set(projects.flatMap((p) => (p.members ?? []).map(String)));
+  const workforceMembers = mine ? workforceAll.filter((m) => ownPeople.has(String(m._id))) : workforceAll;
   const projectIds = projects.map((p) => p._id);
+  const recentActivity = mine ? await AuditLog.find(activityQuery({ role: "Manager", userId: [String(req.user.id), new mongoose.Types.ObjectId(req.user.id)], orgOid: org._id, projectIds })).sort({ createdAt: -1 }).limit(25).lean() : recentActivityAll;
   const projectMap = Object.fromEntries(projects.map((p) => [String(p._id), p]));
   const memberIds  = workforceMembers.map((m) => m._id);
 
@@ -99,8 +111,9 @@ export async function getOpsHub(req, res) {
       .limit(10)
       .lean(),
 
-    Task.find({ orgId, status: "In-Review" })
+    Task.find({ orgId, status: "In-Review", ...(mine ? { projectId: { $in: projectIds } } : {}) })
       .populate("assignees", "name role avatarSeed")
+      .populate("projectId", "title")
       .sort({ updatedAt: -1 })
       .limit(15)
       .lean(),
@@ -186,8 +199,14 @@ export async function getOpsHub(req, res) {
         subject:  { type: "project", id: p._id, title: p.title },
       });
     }
+    // QA4 M-31 (QA3 C-3): a project past its deadline day that is not finished is overdue, with calendar days in the org time zone.
+    const overdueDays = ["Active", "In Review", "On Hold", "Delayed"].includes(p.status) ? calendarDaysOver(p.deadline, now, org.workingTime?.timezone ?? "Asia/Karachi") : 0;
+    if (overdueDays > 0 && p.status !== "Delayed") {
+      alerts.push({ id: alertId(), type: "project_overdue", rule: SEVERITY_RULE, severity: severityForDays(overdueDays), title: "Project overdue",
+        message: `"${p.title}" passed its deadline ${overdueDays} day${overdueDays === 1 ? "" : "s"} ago and is not finished.`, actions: ["open", "request_extension"], subject: { type: "project", id: p._id, title: p.title } });
+    }
     const hs = healthMap.get(String(p._id))?.score ?? 100;
-    if (hs < 50 && p.status !== "Completed" && p.status !== "Archived") {
+    if (hs < ATTENTION_FROM && p.status !== "Completed" && p.status !== "Archived") {
       alerts.push({
         id:       alertId(),
         type:     "health_critical",
@@ -199,36 +218,48 @@ export async function getOpsHub(req, res) {
     }
   }
 
-  // Overdue milestones
-  for (const ms of overdueMs) {
+  // Overdue milestones (QA4 M-31): a finished module or a closed project is never overdue; days are calendar days in the org time zone.
+  const tz = org.workingTime?.timezone ?? "Asia/Karachi";
+  const msCounts = Object.fromEntries((await Task.aggregate([{ $match: { milestoneId: { $in: overdueMs.map((m) => m._id) } } }, { $group: { _id: "$milestoneId", total: { $sum: 1 }, done: { $sum: { $cond: [{ $eq: ["$status", "Done"] }, 1, 0] } } } }])).map((r) => [String(r._id), r]));
+  const lateMs = overdueMs.filter((ms) => alertableModule({ ...(msCounts[String(ms._id)] ?? { total: 0, done: 0 }), status: ms.status }, projectMap[String(ms.projectId)]?.status));
+  for (const ms of lateMs) {
     const proj = projectMap[String(ms.projectId)];
     const dDate = ms.endDate ?? ms.dueDate;
-    const daysLate = dDate ? Math.ceil((now - new Date(dDate)) / 86_400_000) : null;
+    const daysLate = dDate ? calendarDaysOver(dDate, now, tz) : null;
+    if (daysLate === 0) continue;
     alerts.push({
       id:       alertId(),
       type:     "milestone_overdue",
-      severity: daysLate !== null && daysLate > 7 ? "Critical" : "High",
+      rule:     SEVERITY_RULE,
+      severity: daysLate !== null ? severityForDays(daysLate) : "High",
       title:    `Milestone overdue`,
       message:  `"${ms.title}"${proj ? ` in "${proj.title}"` : ""} is overdue${daysLate !== null ? ` by ${daysLate}d` : ""}`,
       subject:  { type: "milestone", id: ms._id, title: ms.title, projectId: ms.projectId, projectTitle: proj?.title },
     });
   }
 
-  // Workforce overload alerts
+  // Workforce overload (QA4 M-4 / M-31): the SAME capacity numbers as Resources, the AI and the Director; only ABOVE the limit counts.
+  const snaps = await getBulkWorkloadSnapshots(workforceMembers.map((m) => m._id), { workTime: orgWorkTime(org) });
+  const limit = effectiveThreshold(getAlertSettings(org).overloadLimitPct, (await User.findById(req.user.id, "workloadThresholdPct").lean())?.workloadThresholdPct);
+  const over = overloadedList(snaps.map((x) => ({ id: String(x.userId), utilisation: x.utilisation, snap: x })), limit);
+  const memberById = Object.fromEntries(workforceMembers.map((m) => [String(m._id), m]));
+  for (const o of over) {
+    const m = memberById[o.id]; if (!m) continue;
+    alerts.push({
+      id:       alertId(),
+      type:     "member_overloaded",
+      rule:     `Over their limit of ${limit}% of daily capacity.`,
+      severity: o.utilisation >= 150 ? "Critical" : "High",
+      title:    `${m.name} is over capacity`,
+      message:  `${m.name} is at ${o.utilisation}% of daily capacity (limit ${limit}%).`,
+      actions:  ["open", "nudge_team_lead", "request_reallocation"],
+      subject:  { type: "member", id: m._id, name: m.name, role: m.role, avatarSeed: m.avatarSeed ?? m.name },
+    });
+  }
   for (const m of workforceMembers) {
     const uid    = String(m._id);
     const bucket = taskMap[uid] ?? { inProgress: 0, overdue: 0 };
-    const hp     = gpMap[uid]?.hp ?? 100;
-    if (bucket.inProgress >= 4 || hp < 30) {
-      alerts.push({
-        id:       alertId(),
-        type:     "member_overloaded",
-        severity: hp < 20 ? "Critical" : "High",
-        title:    `Team member overloaded`,
-        message:  `${m.name} (${m.role}) — ${bucket.inProgress} active tasks, HP ${hp}%. Consider reallocation.`,
-        subject:  { type: "member", id: m._id, name: m.name, role: m.role, avatarSeed: m.avatarSeed ?? m.name },
-      });
-    } else if (bucket.overdue >= 2) {
+    if (bucket.overdue >= 2) {
       alerts.push({
         id:       alertId(),
         type:     "member_overdue",
@@ -241,13 +272,16 @@ export async function getOpsHub(req, res) {
   }
 
   // Tasks awaiting review > threshold
-  if (tasksInReview.length >= 5) {
+  const oldestReviewDays = tasksInReview.reduce((m, t) => Math.max(m, Math.floor((+now - +new Date(t.updatedAt)) / 86_400_000)), 0);
+  if (tasksInReview.length >= REVIEW_QUEUE_MIN || oldestReviewDays >= REVIEW_QUEUE_DAYS) {
     alerts.push({
       id:       alertId(),
       type:     "review_queue_high",
       severity: "Medium",
       title:    `Review queue backed up`,
-      message:  `${tasksInReview.length} tasks currently waiting for review — consider distributing workload`,
+      rule:     `Shown when ${REVIEW_QUEUE_MIN} or more tasks wait, or any task has waited ${REVIEW_QUEUE_DAYS} days or more.`,
+      message:  `${tasksInReview.length} tasks are waiting for review${oldestReviewDays ? `, the oldest for ${oldestReviewDays} day${oldestReviewDays === 1 ? "" : "s"}` : ""}.`,
+      actions:  ["open", "nudge_team_lead"],
       subject:  { type: "system", title: "Review Queue" },
     });
   }
@@ -261,7 +295,7 @@ export async function getOpsHub(req, res) {
     projectStatus: projectMap[String(ms.projectId)]?.status ?? "Unknown",
   }));
 
-  const enrichedOverdue = overdueMs.map((ms) => ({
+  const enrichedOverdue = lateMs.map((ms) => ({
     ...ms,
     projectTitle:  projectMap[String(ms.projectId)]?.title ?? "Unknown",
     projectStatus: projectMap[String(ms.projectId)]?.status ?? "Unknown",
@@ -293,11 +327,11 @@ export async function getOpsHub(req, res) {
   }, {});
 
   // M-2: project deadline extensions this Manager sent to the Director (last 30 days), shown read-only in Requests.
-  const myExtensions = await ExtensionRequest.find({ requestedBy: req.user.id, taskId: null, createdAt: { $gte: new Date(now - 30 * 86_400_000) } },
-    "projectId requestedDays reason status directorNote createdAt").populate("projectId", "title").sort({ createdAt: -1 }).limit(10).lean();
+  const myExtensions = await ExtensionRequest.find({ requestedBy: req.user.id, createdAt: { $gte: new Date(now - 90 * 86_400_000) } }, // QA4 M-38: ALL requests this Manager sent (task and project), not only project ones
+    "projectId taskId requestedDays counterDays reason status directorNote originalDeadline decidedAt createdAt").populate("projectId", "title").populate("taskId", "title").sort({ createdAt: -1 }).limit(50).lean();
 
   res.json({
-    myExtensions: myExtensions.map((e) => ({ id: e._id, projectId: e.projectId?._id ?? null, projectTitle: e.projectId?.title ?? "Project", days: e.requestedDays, reason: e.reason, status: e.status, note: e.directorNote ?? null, at: e.createdAt })),
+    myExtensions: myExtensions.map((e) => ({ id: e._id, projectId: e.projectId?._id ?? null, projectTitle: e.projectId?.title ?? "Project", kind: e.taskId ? "task" : "project", taskTitle: e.taskId?.title ?? null, originalDeadline: e.originalDeadline ?? null, newDeadline: e.originalDeadline ? new Date(+new Date(e.originalDeadline) + e.requestedDays * 86_400_000) : null, decidedAt: e.decidedAt ?? null, counterDays: e.counterDays ?? null, days: e.requestedDays, reason: e.reason, status: e.status, note: e.directorNote ?? null, at: e.createdAt })),
     requests:          pendingRequests,
     alerts:            alerts.slice(0, 20),
     activity:          enrichedActivity,
@@ -307,14 +341,15 @@ export async function getOpsHub(req, res) {
     workforceWarnings,
     stats: {
       pendingRequests:   pendingRequests.length,
-      activeAlerts:      alerts.length,
+      activeAlerts:      alerts.length, // items; groups = alertGroups
+      alertGroups:       new Set(alerts.map((a) => a.type)).size,
       tasksInReview:     tasksInReview.length,
       upcomingDeadlines: enrichedUpcoming.length,
       overdueItems:      enrichedOverdue.length,
       workforceIssues:   workforceWarnings.length,
       available:         wfCounts.Available  ?? 0,
       busy:              wfCounts.Busy       ?? 0,
-      overloaded:        wfCounts.Overloaded ?? 0,
+      overloaded:        over.length, // QA4: one overloaded meaning (shared capacity, above the limit)
       totalProjects:     projects.length,
       activeProjects:    projects.filter((p) => p.status === "Active").length,
       delayedProjects:   projects.filter((p) => p.status === "Delayed").length,

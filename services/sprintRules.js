@@ -148,3 +148,18 @@ export function sprintNotifyList({ members = [], managerId = null, actorId = nul
   return [...ids];
 }
 
+
+// QA4 M-36: a sprint stays inside its project's date range (when the project has one).
+export function sprintRangeError({ startDate, endDate }, project) {
+  const day = (d) => (d ? new Date(d).toISOString().slice(0, 10) : null), s = day(startDate), e = day(endDate), ps = day(project?.startDate), pd = day(project?.deadline);
+  if (pd && e && e > pd) return `The sprint cannot end after the project's deadline (${pd}).`;
+  if (ps && s && s < ps) return `The sprint cannot start before the project starts (${ps}).`;
+  return null;
+}
+// Not blocks, warnings the dialog shows: planning a sprint on a project that is already in review or past its deadline.
+export function sprintProjectWarnings(project, now = new Date()) {
+  const out = [];
+  if (project?.status === "In Review") out.push("This project is In Review. Check that a new sprint is really needed.");
+  if (project?.deadline && new Date(project.deadline) < now && !["Completed", "Archived"].includes(project.status)) out.push("This project is past its deadline.");
+  return out;
+}

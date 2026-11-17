@@ -1,4 +1,6 @@
 import { Router } from "express";
+import mongoose from "mongoose";
+import Project from "../models/Project.js";
 import { verifyToken, requireRole } from "../middleware/authMiddleware.js";
 import { attachmentUpload } from "../middleware/upload.js";
 import {
@@ -52,6 +54,7 @@ import { listManagerReports }  from "../controllers/voiceController.js";
 import { listManagerGoals }    from "../controllers/goalController.js";
 import { getHome, nudgeReviewer } from "../controllers/managerHomeController.js";
 import * as mp from "../controllers/managerProjectsController.js";
+import * as fl from "../controllers/flowsController.js";
 import * as mr from "../controllers/managerResourcesController.js";
 import { listBookings, createBooking, cancelBooking } from "../controllers/assetBookingController.js";
 import * as mm from "../controllers/managerMotivationController.js";
@@ -61,6 +64,11 @@ import * as ai from "../controllers/managerAiController.js";
 const router = Router();
 
 router.use(verifyToken, requireRole("Manager", "Team Lead"));
+// QA4 D-QA4-8: every /projects/:id... route answers 404 for a Manager who does not manage that project (Team Leads keep their own rules).
+router.use("/projects/:id", async (req, res, next) => {
+  if (req.user.role !== "Manager" || !mongoose.isValidObjectId(req.params.id)) return next();
+  try { return (await Project.exists({ _id: req.params.id, managerId: req.user.id })) ? next() : res.status(404).json({ error: "Project not found." }); } catch (e) { return next(e); }
+});
 
 router.get("/dashboard",                            getDashboard);
 router.get("/team",                                 getTeam);
@@ -80,7 +88,15 @@ router.get("/projects/:id/overview",                mgr, mp.getOverview);
 router.get("/projects/:id/history",                 mgr, mp.getHistory);
 router.get("/projects/:id/team",                    mgr, mp.getTeam);
 router.post("/projects/:id/members",                mgr, mp.addMember);
-router.delete("/projects/:id/members/:userId",      mgr, mp.removeMember);
+// QA4 Y-8: removing a member is blocked by open tasks and by leading a module; past work stays (see flowsController)
+router.get("/projects/:id/members/:userId/remove-check", mgr, fl.removeCheck);
+router.delete("/projects/:id/members/:userId",      mgr, fl.removeMember);
+// QA4 Y-6 Change Team Lead, Y-7 Request reallocation / Nudge
+router.get("/projects/:id/modules/:moduleId/change-lead/preview", mgr, fl.changeLeadPreview);
+router.post("/projects/:id/modules/:moduleId/change-lead",        mgr, fl.changeLead);
+router.post("/tasks/:id/request-reallocation", mgr, fl.requestReallocation);
+router.post("/tasks/:id/nudge-team-lead",      mgr, fl.nudgeTeamLead);
+router.get("/reallocation-requests",           mgr, fl.listSent);
 router.get("/projects/:id/modules",                 mgr, mp.getModules);
 router.patch("/projects/:id/modules/:moduleId/lead", mgr, mp.assignModuleLead);
 router.get("/projects/:id/sprints",                 mgr, mp.getProjectSprints);

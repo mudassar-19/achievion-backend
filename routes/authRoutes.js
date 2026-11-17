@@ -1,4 +1,5 @@
 import { getProfileDetails, updateProfileDetails, getBranding, getLogo } from "../controllers/directorOrgController.js";
+import { destinationsFor } from "../services/aiDestinations.js";
 import { Router } from "express";
 import { groupsFor, LANDINGS } from "../services/notificationPrefs.js";
 import { isRankable } from "../services/leaderboardRules.js";
@@ -38,6 +39,8 @@ router.get("/settings/options", verifyToken, (req, res) => res.json({
 
 // Sessions — D-022e
 router.get( "/sessions",                  verifyToken, listSessions);
+// QA4 Y-1: where an AI entity card opens, for the caller's portal
+router.get( "/ai-destinations",            verifyToken, (req, res) => res.json({ role: req.user.role, map: destinationsFor(req.user.role) }));
 router.post("/sessions/sign-out-others",  verifyToken, signOutOtherSessions);
 
 // View as — AUTH-11, D-109 (read-only; middleware/viewAs.js guards every request)

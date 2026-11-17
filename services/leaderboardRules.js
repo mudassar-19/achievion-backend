@@ -32,3 +32,12 @@ const PUBLIC = ["userId", "name", "role", "roleLabel", "level", "xp", "rankXp", 
 export function publicRow(row) {
   return { ...Object.fromEntries(PUBLIC.filter((k) => k in row).map((k) => [k, row[k]])), avatar: avatarOf(row, row.name) };
 }
+
+// QA4 D-QA4-6: role tabs. "All" leaves Team Leads out: their XP comes from reviewing other people's work, so it is not comparable with task XP.
+export const TABS = ["all", "developers", "designers", "testers", "teamleads"];
+const TAB_ROLE = { developers: "Developer", designers: "Designer", testers: "Tester", teamleads: "Team Lead" };
+export function inTab(role, tab) {
+  if (!isRankable(role)) return false;
+  const want = TAB_ROLE[tab];
+  return want ? base(role) === want : base(role) !== "Team Lead";
+}

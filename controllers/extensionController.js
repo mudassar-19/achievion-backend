@@ -41,7 +41,7 @@ export async function requestExtension(req, res) {
   ]);
 
   const maxExtensions = rules.maxExtensionsPerTask ?? 3;
-  const maxDays       = rules.extensionMaxDays ?? 30;
+  const maxDays       = rules.extensionMaxDays ?? 3 /* QA4 D-QA4-12: default 3 working days */;
   const maxPct        = rules.extensionMaxPct  ?? 20;
   const maxCumCapPct  = rules.extensionCumCapPct ?? 20;
 

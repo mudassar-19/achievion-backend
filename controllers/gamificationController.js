@@ -6,7 +6,7 @@ import XpLog from "../models/XpLog.js";
 import Project from "../models/Project.js";
 import Task from "../models/Task.js";
 import { orgScope } from "./managerProjectsController.js";
-import { isRankable, rankRows, rankChange, scopesFor, MIN_PEOPLE, publicRow } from "../services/leaderboardRules.js";
+import { isRankable, rankRows, rankChange, scopesFor, MIN_PEOPLE, publicRow, inTab, TABS } from "../services/leaderboardRules.js";
 import { periodSince, groupXpBySource, withResidual } from "../services/leaderboardXp.js";
 import { onTimeExpr } from "../services/onTimeRule.js";
 import { orgTimezone } from "../services/orgTimezone.js";
@@ -228,6 +228,7 @@ export async function getLeaderboard(req, res) {
   // U-1 (D-133): one leaderboard for every portal (UC-13, FR05-05). Only XP roles are ranked, never Managers/Directors.
   const { id: userId, orgId, role } = req.user;
   const scopes = scopesFor(role);
+  const tab = TABS.includes(req.query.tab) ? req.query.tab : "all";
   const asked  = req.query.scope === "org" ? "company" : req.query.scope;
   const scope  = scopes.includes(asked) ? asked : scopes[0];
   const period = { weekly: "week", monthly: "month", overall: "all" }[req.query.timeRange] ?? (["week", "month", "all"].includes(req.query.period) ? req.query.period : "all");
@@ -250,7 +251,7 @@ export async function getLeaderboard(req, res) {
 
   const userFilter = { orgId, status: { $ne: "deleted" } };
   if (people) userFilter._id = { $in: [...people] };
-  const users = (await User.find(userFilter, "_id name role roleLabel avatarSeed").lean()).filter((u) => isRankable(u.role));
+  const users = (await User.find(userFilter, "_id name role roleLabel avatarSeed").lean()).filter((u) => inTab(u.role, tab)); // QA4 D-QA4-6: role tabs; "all" leaves Team Leads out
   const userIds = users.map((u) => u._id);
   const profiles = new Map((await GamificationProfile.find({ userId: { $in: userIds } }, "userId level totalXp monthlyXp streaks stats avatarStyle avatarSeed shopEquipped previousDaily longestDaily").lean()).map((p) => [String(p.userId), p]));
 
@@ -299,7 +300,7 @@ export async function getLeaderboard(req, res) {
   const top = ranked[0] && ranked[0].xp > 0 ? ranked[0] : null;
   res.json({
     success: true, rows: ranked, total: ranked.length, enough: ranked.length >= MIN_PEOPLE,
-    scope, period, scopes, project: project ? { id: project._id, title: project.title } : null,
+    scope, period, scopes, tab, tabs: TABS, project: project ? { id: project._id, title: project.title } : null,
     projects: projects.map((p) => ({ id: p._id, title: p.title })),
     meta: { avgXp, activeContributors: ranked.filter((r) => r.weeklyXp > 0).length,
       topPerformer: top ? { name: top.name, xp: top.xp, role: top.role, userId: top.userId } : null },

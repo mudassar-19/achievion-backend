@@ -25,7 +25,7 @@ import { getAlertSettings } from "../services/alertRules.js";
 import {
   makeRefs, dailyLimit, usageState, dayKey, cacheKey, contextFromPath, resolveContext, PROMPTS_FOR, sourcesFor, proactiveCards, prune,
   withNames, validateChat, validateInsight, validateNarrative, validateScope, validateLessonsDraft, validateChallengeDraft, validateRebalance, validateExplain,
-  FEATURE_PREFIX, hidePeople,
+  FEATURE_PREFIX, hidePeople, stripPeopleRefs, entitiesFromRefs,
 } from "../services/managerAiRules.js";
 import { orgScope } from "./managerProjectsController.js";
 import { capture, passOn } from "../utils/capture.js";
@@ -49,7 +49,7 @@ async function usageOf(req, org) {
 // { cacheFirst: true }: the caller serves a cached result before checking the limit (a cache hit costs nothing),
 // then calls overLimit() before a real AI call.
 async function gate(req, res, { cacheFirst = false } = {}) {
-  const scope = await orgScope(req.user.orgId);
+  const scope = await orgScope(req.user.orgId, req.user);
   if (!scope) { res.status(404).json({ error: "Organization not found." }); return null; }
   if (!aiConfigured()) { res.status(503).json({ error: "AI is not configured on this server. Everything else works as usual.", code: "ai_off" }); return null; }
   const usage = await usageOf(req, scope.org);
@@ -95,7 +95,9 @@ const endOfDay = () => { const d = new Date(); d.setHours(24, 0, 0, 0); return +
 
 // ── Snapshots (numbers only, short references) ───────────────────────────────
 async function workload(scope, userId) {
-  const users = await User.find({ ...scope.filter, status: { $ne: "deleted" }, role: { $nin: LEADERS } }, "_id").lean();
+  // QA4 D-QA4-8: a Manager's team = the people on the projects they manage
+  const own = scope.pfilter.managerId ? [...new Set((await Project.find(scope.pfilter, "members").lean()).flatMap((pr) => (pr.members ?? []).map(String)))] : null;
+  const users = await User.find({ ...scope.filter, status: { $ne: "deleted" }, role: { $nin: LEADERS }, ...(own ? { _id: { $in: own } } : {}) }, "_id").lean();
   const [snaps, me] = await Promise.all([getBulkWorkloadSnapshots(users.map((u) => u._id), { workTime: orgWorkTime(scope.org) }), User.findById(userId, "workloadThresholdPct").lean()]);
   const threshold = effectiveThreshold(getAlertSettings(scope.org).overloadLimitPct, me?.workloadThresholdPct);
   return { threshold, members: snaps.map((s) => ({ id: s.userId, name: s.name, role: s.role, utilisation: s.utilisation, load: loadLabel(s.utilisation),
@@ -112,15 +114,17 @@ async function teamSnapshot(req, scope, refs, { projectId = null } = {}) {
     const set = new Set((p?.members ?? []).map(String));
     members = members.filter((m) => set.has(String(m.id)));
   }
+  const cards = {};
   const tiers = members.reduce((a, m) => ({ ...a, [m.status]: (a[m.status] ?? 0) + 1 }), {});
   return {
-    projects: projects.slice(0, 10).map((p) => ({ ref: refs.add("p", p.id), title: p.title, health: p.healthScore == null ? p.healthBand : `${p.healthScore} (${p.healthBand})`, progressPct: p.progressPct, overdueTasks: p.overdueTasks, deadline: p.deadline })),
+    projects: projects.slice(0, 10).map((p) => { cards[refs.add("p", p.id)] = { type: "project", id: p.id, title: p.title, band: p.healthBand, progressPct: p.progressPct, overdue: p.overdueTasks }; return ({ ref: refs.add("p", p.id), title: p.title, health: p.healthScore == null ? p.healthBand : `${p.healthScore} (${p.healthBand})`, progressPct: p.progressPct, overdueTasks: p.overdueTasks, deadline: p.deadline }); }),
     tasks: h.tasks, dueThisWeek: h.deadlinesThisWeek ? { tasks: h.deadlinesThisWeek.tasks, projects: h.deadlinesThisWeek.projects.length } : undefined,
-    activeSprints: (h.sprints ?? []).slice(0, 6).map((s) => ({ ref: refs.add("s", s.id), name: s.name, done: s.done, total: s.total, endDate: s.endDate })),
+    activeSprints: (h.sprints ?? []).slice(0, 6).map((s) => { cards[refs.add("s", s.id)] = { type: "sprint", id: s.id, name: s.name, done: s.done, total: s.total, endDate: s.endDate }; return ({ ref: refs.add("s", s.id), name: s.name, done: s.done, total: s.total, endDate: s.endDate }); }),
     teamActivity: h.teamActivity, openAnomalies: h.openAnomalies, runningChallenges: h.runningChallenges,
     workloadLimitPct: wl.threshold, membersByStatus: tiers,
     membersTotal: members.length,
-    members: members.slice(0, 15).map((m) => ({ ref: refs.add("m", m.id), name: m.name, role: m.role, load: m.load, status: m.status, activeTasks: m.activeTasks, freeHoursPerDay: m.freeHoursPerDay })),
+    members: members.slice(0, 15).map((m) => { const ref = refs.add("m", m.id); cards[ref] = { type: "person", id: m.id, name: m.name, role: m.role, loadPct: m.utilisation, load: m.load, freeHoursPerDay: m.freeHoursPerDay, activeTasks: m.activeTasks, status: m.status }; return ({ ref, name: m.name, role: m.role, load: m.load, status: m.status, activeTasks: m.activeTasks, freeHoursPerDay: m.freeHoursPerDay }); }),
+    _cards: cards,
     _overloaded: members.filter((m) => m.status === "Overloaded").length, _sprints: h.sprints ?? [], _overdue: h.tasks?.overdue ?? 0,
   };
 }
@@ -151,7 +155,7 @@ async function reportSnapshot(req, query) {
 // Lists for the context chip: the caller's org only.
 async function contextLists(scope) {
   const [projects, sprints] = await Promise.all([
-    Project.find({ ...scope.filter, isDeleted: { $ne: true }, status: { $nin: ["Deleted"] } }, "title status").sort({ updatedAt: -1 }).limit(200).lean(),
+    Project.find({ ...scope.pfilter, isDeleted: { $ne: true }, status: { $nin: ["Deleted"] } }, "title status").sort({ updatedAt: -1 }).limit(200).lean(),
     Sprint.find({ ...scope.filter }, "name status").sort({ updatedAt: -1 }).limit(200).lean(),
   ]);
   return { projects: projects.map((p) => ({ id: String(p._id), title: p.title, status: p.status })), sprints: sprints.map((s) => ({ id: String(s._id), name: s.name, status: s.status })) };
@@ -165,7 +169,7 @@ function readContext(body, lists) {
 // ── GET /api/manager/ai/context?path=&search=&kind=&id=&query= ───────────────
 // Panel header data: AI on/off, usage, the chip (+ choices), suggested prompts, proactive cards. No AI call.
 export async function getContext(req, res) {
-  const scope = await orgScope(req.user.orgId);
+  const scope = await orgScope(req.user.orgId, req.user);
   if (!scope) return res.status(404).json({ error: "Organization not found." });
   const lists = await contextLists(scope);
   const ctx = readContext({ context: req.query.kind ? req.query : { ...req.query, kind: "path" } }, lists);
@@ -227,12 +231,13 @@ export async function chat(req, res) {
     });
     const chatDoc = existing ?? new AIChat({ orgId: req.user.orgId, userId: req.user.id, title: message.slice(0, 60) });
     const cited = value.sources.map((k) => ({ key: k, ...sources[k] }));
-    value.answer = named(value.answer, team);
+    value.answer = named(stripPeopleRefs(value.answer), team); // QA4 M-2: no person in the text, cards below
+    const entities = entitiesFromRefs(value.refs ?? [], team._cards ?? {});
     chatDoc.messages.push({ role: "user", text: message, context: ctx.label }, { role: "ai", text: value.answer, sources: cited, context: ctx.label });
     if (chatDoc.messages.length > 200) chatDoc.messages.splice(0, chatDoc.messages.length - 200);
     await chatDoc.save();
     const last = chatDoc.messages[chatDoc.messages.length - 1];
-    res.json({ chatId: chatDoc._id, title: chatDoc.title, message: { id: last._id, role: "ai", text: last.text, sources: cited, context: ctx.label }, usage: spent(g.usage, fromCache), aiGenerated: true });
+    res.json({ chatId: chatDoc._id, title: chatDoc.title, message: { id: last._id, role: "ai", text: last.text, sources: cited, entities, context: ctx.label }, usage: spent(g.usage, fromCache), aiGenerated: true });
   } catch (err) { aiFail(res, err, g.usage); }
 }
 
@@ -273,6 +278,9 @@ export async function getInsight(req, res) {
     const { value, fromCache } = await ask(req, { feature: "mgr_insight", promptId: "mgr-insight", data: strip(snap), check: (o) => validateInsight(o, refs) });
     const view = value.kind === "none" ? { kind: "none" } : {
       kind: value.kind, title: named(value.title, snap), body: named(value.body, snap), why: value.why.map((w) => named(w, snap)), target: targetLink(refs, value.target, snap),
+      // QA4 M-34(a) / Y-1: one card per person for an overload insight (not only the first), else the target
+      entities: value.kind === "overload" ? Object.entries(snap._cards ?? {}).filter(([, c]) => c.type === "person" && c.status === "Overloaded").slice(0, 6).map(([ref, c]) => ({ ref, ...c }))
+        : entitiesFromRefs(value.target ? [value.target] : [], snap._cards ?? {}),
     };
     const saved = await cachePut(key, req.user.orgId, "mgr_insight", view, ttlMs);
     res.json({ insight: view, dismissed: false, cachedAt: saved.updatedAt, key, usage: spent(g.usage, fromCache), aiGenerated: true });

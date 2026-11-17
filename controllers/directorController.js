@@ -24,6 +24,7 @@ import XpLog from "../models/XpLog.js";
 import { shouldFlagAdjust } from "../services/xpAdjustRules.js";
 import { xpTotalsByRole } from "../services/xpByRole.js";
 import { cleanDetail, auditSentence, whenText } from "../services/auditText.js";
+import { loadRenames, applyRenames } from "../services/propagation.js";
 
 // Map a role string to its category label (mirrors ROLE_CATEGORY_MAP)
 function roleToCat(role) {
@@ -612,6 +613,7 @@ export async function getAuditLog(req, res) {
   const actors = new Map((await User.find({ _id: { $in: actorIds } }, "name role").lean()).map((u) => [String(u._id), u]));
   for (const l of logs) { const a = actors.get(String(l.performedBy)); if (a) l.performedBy = a; }
 
+  const renames = await loadRenames(org._id); // QA4 Y-2
   const mapped = logs.map((l) => ({
     id:            l._id,
     action:        l.action,
@@ -623,11 +625,11 @@ export async function getAuditLog(req, res) {
     oldRole:       l.oldRole    ?? null,
     newRole:       l.newRole    ?? null,
     newStatus:     l.newStatus  ?? null,
-    detail:        cleanDetail(l.detail) ?? null, // QA3 G-15: no config keys, working days
+    detail:        applyRenames(cleanDetail(l.detail), renames) ?? null, // QA3 G-15: no config keys, working days
     createdAt:     l.createdAt,
     when:          whenText(l.createdAt, org.workingTime?.timezone), // one time format everywhere
-    sentence:      auditSentence({ action: l.action, performerName: typeof l.performedBy === "object" ? l.performedBy?.name : null, targetName: l.targetUserId?.name,
-                     projectTitle: l.projectTitle ?? l.targetProjectId?.title, oldRole: l.oldRole, newRole: l.newRole, detail: l.detail }),
+    sentence:      applyRenames(auditSentence({ action: l.action, performerName: typeof l.performedBy === "object" ? l.performedBy?.name : null, targetName: l.targetUserId?.name,
+                     projectTitle: l.projectTitle ?? l.targetProjectId?.title, oldRole: l.oldRole, newRole: l.newRole, detail: l.detail }), renames),
     // Slice 3a fields (D-022a)
     performerName: typeof l.performedBy === "object" ? l.performedBy?.name ?? null : null,
     performerRole: typeof l.performedBy === "object" ? l.performedBy?.role ?? null : null,

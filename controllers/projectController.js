@@ -3,7 +3,7 @@ import { firstLengthError } from "../services/textLimits.js";
 import Milestone from "../models/Milestone.js";
 import Task      from "../models/Task.js";
 import Risk      from "../models/Risk.js";
-import { completionBlockers } from "../services/completionRules.js";
+import { completionBlockers, moduleDateError } from "../services/completionRules.js";
 import AuditLog  from "../models/AuditLog.js";
 import Organization from "../models/Organization.js";
 import { healthForProjects } from "../services/projectHealthService.js";
@@ -67,8 +67,13 @@ export async function getProjectById(req, res) {
   const tc = health.byStatus;
   const { total, done } = health;
 
+  // QA4 Y-8: people taken off the project, named from their ids
+  const formerUsers = new Map((await User.find({ _id: { $in: (project.formerMembers ?? []).map((f) => f.userId) } }, "name role").lean()).map((u) => [String(u._id), u]));
+  const formerMembers = (project.formerMembers ?? []).filter((f) => !f.readdedAt).map((f) => ({ id: f.userId, name: formerUsers.get(String(f.userId))?.name ?? "Former member", role: formerUsers.get(String(f.userId))?.role ?? null, removedAt: f.removedAt, reason: f.reason ?? "" }));
+
   return res.json({
     ...project,
+    formerMembers,
     healthScore: health.score, // computed on read (D-077)
     healthBand:  health.band,
     setup:       ["Planning", "Scheduled"].includes(project.status) ? (await setupFor({ ...project, _id: project._id })).steps : null, // U-1 "Needs setup"
@@ -200,8 +205,10 @@ export async function createMilestone(req, res) {
   if (!resolved) return res.status(404).json({ error: "Organization not found." });
   const { org, filter } = resolved;
 
-  const project = await Project.findOne({ _id: req.params.id, ...filter }, "_id orgId").lean();
+  const project = await Project.findOne({ _id: req.params.id, ...filter }, "_id orgId deadline").lean();
   if (!project) return res.status(404).json({ error: "Project not found." });
+  const dateErr = moduleDateError({ start: startDate, due: dueDate }, project.deadline); // QA4 M-43
+  if (dateErr) return res.status(400).json({ error: dateErr });
 
   const milestone = await Milestone.create({
     title:       title.trim(),
@@ -238,6 +245,11 @@ export async function updateMilestone(req, res) {
 
   if (Object.keys(updates).length === 0)
     return res.status(400).json({ error: "No valid fields provided." });
+  if (updates.dueDate !== undefined || updates.startDate !== undefined) { // QA4 M-43
+    const [ms, pr] = await Promise.all([Milestone.findOne({ _id: milestoneId, projectId: req.params.id }, "startDate dueDate").lean(), Project.findById(req.params.id, "deadline").lean()]);
+    const dateErr = moduleDateError({ start: updates.startDate ?? ms?.startDate, due: updates.dueDate ?? ms?.dueDate }, pr?.deadline);
+    if (dateErr) return res.status(400).json({ error: dateErr });
+  }
   const tooLong = firstLengthError([["Module name", updates.title, "name"], ["Description", updates.description, "description"]]);
   if (tooLong) return res.status(400).json({ error: tooLong });
 

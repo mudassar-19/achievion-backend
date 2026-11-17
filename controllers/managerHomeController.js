@@ -23,17 +23,19 @@ export async function getHome(req, res) {
   const { orgId } = req.user;
   const now = new Date(), weekEnd = new Date(+now + 7 * DAY), weekAgo = new Date(+now - 7 * DAY), twoWeeksAgo = new Date(+now - 14 * DAY);
 
-  const [org, members] = await Promise.all([
-    Organization.findOne(IS_OID.test(orgId) ? { _id: orgId } : { orgId }, "_id orgId").lean(),
-    User.find({ orgId, status: { $ne: "deleted" }, role: { $nin: LEADERS } }, "_id").lean(),
-  ]);
+  const org = await Organization.findOne(IS_OID.test(orgId) ? { _id: orgId } : { orgId }, "_id orgId").lean();
   const orgIds = org ? [String(org._id), ...(org.orgId ? [org.orgId] : [])] : [orgId];
+  // QA4 D-QA4-8: a Manager sees only the projects they manage: every number below is built from those projects, their tasks and their people.
+  const mine = req.user.role === "Manager";
+  const projects = await Project.find({ orgId: { $in: orgIds }, isDeleted: { $ne: true }, ...(mine ? { managerId: req.user.id } : {}) }, "title status priority deadline startDate createdAt members").lean();
+  const pids = projects.map((p) => p._id), taskScope = mine ? { projectId: { $in: pids } } : {};
+  const memberQuery = mine ? { _id: { $in: [...new Set(projects.flatMap((p) => (p.members ?? []).map(String)))] } } : {};
+  const members = await User.find({ orgId, status: { $ne: "deleted" }, role: { $nin: LEADERS }, ...memberQuery }, "_id").lean();
   const memberIds = members.map((m) => m._id);
 
-  const [projects, taskAgg, dueTasks, sprints, xpAgg, activeStreaks, flagAgg, runningChallenges] = await Promise.all([
-    Project.find({ orgId: { $in: orgIds }, isDeleted: { $ne: true } }, "title status priority deadline startDate createdAt").lean(),
+  const [taskAgg, dueTasks, sprints, xpAgg, activeStreaks, flagAgg, runningChallenges] = await Promise.all([
     Task.aggregate([
-      { $match: { orgId, isDeleted: { $ne: true } } },
+      { $match: { orgId, isDeleted: { $ne: true }, ...taskScope } },
       { $group: {
         _id: null,
         pending: { $sum: { $cond: [{ $in: ["$status", ["Backlog", "To-Do"]] }, 1, 0] } },
@@ -41,16 +43,16 @@ export async function getHome(req, res) {
         overdue: { $sum: { $cond: [{ $and: [{ $ne: ["$status", "Done"] }, { $ne: ["$deadline", null] }, { $lt: ["$deadline", now] }] }, 1, 0] } },
       } },
     ]),
-    Task.find({ orgId, status: { $ne: "Done" }, deadline: { $gte: now, $lte: weekEnd } }, "title deadline projectId")
+    Task.find({ orgId, ...taskScope, status: { $ne: "Done" }, deadline: { $gte: now, $lte: weekEnd } }, "title deadline projectId")
       .sort({ deadline: 1 }).limit(50).lean(),
-    Sprint.find({ orgId: { $in: orgIds }, status: "Active" }, "name endDate projectId tasks").populate("tasks", "status").lean(),
+    Sprint.find({ orgId: { $in: orgIds }, ...(mine ? { projectId: { $in: pids } } : {}), status: "Active" }, "name endDate projectId tasks").populate("tasks", "status").lean(),
     XpLog.aggregate([
       { $match: { userId: { $in: memberIds }, createdAt: { $gte: twoWeeksAgo } } },
       { $group: { _id: { $cond: [{ $gte: ["$createdAt", weekAgo] }, "this", "last"] }, xp: { $sum: "$amount" } } },
     ]),
     GamificationProfile.countDocuments({ userId: { $in: memberIds }, "streaks.daily": { $gt: 0 } }),
     // M-5: open anomaly flags (same records as the Anomalies screen)
-    Task.aggregate([{ $match: { orgId: { $in: orgIds }, "reviewFlags.0": { $exists: true } } }, { $unwind: "$reviewFlags" }, { $match: { "reviewFlags.status": "open" } }, { $count: "n" }]),
+    Task.aggregate([{ $match: { orgId: { $in: orgIds }, ...taskScope, "reviewFlags.0": { $exists: true } } }, { $unwind: "$reviewFlags" }, { $match: { "reviewFlags.status": "open" } }, { $count: "n" }]),
     Quest.countDocuments({ orgId: { $in: orgIds }, status: "active" }),
   ]);
 
@@ -88,6 +90,8 @@ export async function nudgeReviewer(req, res) {
   if (!mongoose.isValidObjectId(req.params.id)) return res.status(404).json({ error: "Task not found." });
   const task = await Task.findOne({ _id: req.params.id, orgId }, "title status projectId").lean();
   if (!task) return res.status(404).json({ error: "Task not found." });
+  // QA4 D-QA4-8: only for a task of a project this Manager manages
+  if (req.user.role === "Manager" && !(await Project.exists({ _id: task.projectId, managerId: req.user.id }))) return res.status(404).json({ error: "Task not found." });
   if (task.status !== "In-Review") return res.status(409).json({ error: "This task is no longer waiting for review." });
 
   const recent = await Notification.exists({ type: "review_nudge", "meta.taskId": task._id, createdAt: { $gte: new Date(Date.now() - 60 * 60_000) } });

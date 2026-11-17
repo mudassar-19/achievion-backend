@@ -1,6 +1,7 @@
 // Org Health rules (master list item 18; RND-01, 04, 05, 06, 07, 08 in docs/rnd/RND_LOCKED.md). Pure: no DB, no clock.
 // Tests: server/tests/orgHealthRules.test.mjs.
 import { scoreToStars } from "./xpEngine.js";
+import { healthBand } from "./healthScale.js";
 import { localDate, localDayBoundsUTC } from "./streakService.js";
 
 // Weekly automatic snapshot: due on Monday in the org timezone, once per Monday (the hourly job asks this every hour).
@@ -68,7 +69,7 @@ export function combineFactors(input, weights = WEIGHTS) {
 }
 
 // QA3 G-5: the bands, written down (the colours on screen follow them).
-export const bandOf = (score) => (score == null ? "No data" : score >= 75 ? "Healthy" : score >= 50 ? "Needs attention" : "At risk");
+export const bandOf = healthBand; // QA4 D-QA4-11: the one health scale (75 / 60), see healthScale.js
 
 const LABELS = { delivery: "Delivery", capacity: "Capacity", risk: "Risk control (higher is safer)", quality: "Quality" };
 const n = (v, one, many) => `${v} ${v === 1 ? one : many}`;

@@ -2,7 +2,7 @@
 // Why "Tasks done 0" next to XP is not a contradiction: XP also comes from challenges, badges, streaks and Director corrections.
 const GROUP = {
   task_approved: "Tasks", task_accepted: "Tasks", task_rejected: "Tasks", assigner_bonus: "Tasks",
-  quest: "Challenges", badge: "Badges", streak_bonus: "Streaks", adjust: "Director adjustment", flag_reversal: "Corrections",
+  quest: "Challenges", handover_share: "Handover share", badge: "Badges", streak_bonus: "Streaks", adjust: "Director adjustment", flag_reversal: "Corrections",
 };
 export const xpSourceGroup = (source) => GROUP[source] ?? (String(source).startsWith("tl_") ? "Team Lead work" : "Other");
 

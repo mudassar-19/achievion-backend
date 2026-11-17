@@ -13,11 +13,13 @@ import AuditLog from "../models/AuditLog.js";
 import { createNotification } from "./notificationController.js";
 import { orgScope } from "./managerProjectsController.js";
 import { applyFlagReversal, BADGE_DEFINITIONS } from "../services/gamificationService.js";
-const VALID_BADGE_IDS = new Set(BADGE_DEFINITIONS.map((b) => b.id));
+const ELIGIBLE_BADGES = BADGE_DEFINITIONS.filter((b) => rewardBadgeEligible(b.rarity)); // QA4 M-37(c): no legendary badge as a challenge reward
+const VALID_BADGE_IDS = new Set(ELIGIBLE_BADGES.map((b) => b.id));
 import { resolveParticipants, refreshQuest, sweepQuests } from "../services/questService.js";
 import { isReadOnly } from "../middleware/viewAs.js";
 import {
   METRICS, PAGE_SIZE, STATUSES, rewardCap, validateQuestInput, publishBlockers, editable, duplicateOf, progressPct,
+  managerScopeError, weeklyBudgetUsed, MANAGER_WEEKLY_XP_BUDGET, rewardBadgeEligible,
 } from "../services/questRules.js";
 import { FLAG_KINDS, FLAG_LABEL, flagReason, flagAgeDays, scoresText, REMIND_FLAG_DAYS } from "../services/anomalyRules.js";
 import { entryFor } from "../services/questJoinRules.js";
@@ -27,8 +29,10 @@ const valid = (id) => mongoose.isValidObjectId(id) && /^[0-9a-f]{24}$/i.test(Str
 const idsOf = (scope) => scope.filter.orgId.$in;
 
 async function scopeOr404(req, res) {
-  const scope = await orgScope(req.user.orgId);
+  const scope = await orgScope(req.user.orgId, req.user);
   if (!scope) res.status(404).json({ error: "Organization not found." });
+  // QA4 D-QA4-8: for a Manager, flags and anomalies are only those on tasks of the projects they manage
+  else if (scope.pfilter.managerId) scope.pids = (await Project.find(scope.pfilter, "_id").lean()).map((pr) => pr._id);
   return scope;
 }
 const log = (scope, req, action, detail, extra = {}) => AuditLog.create({ action, orgId: scope.org._id, performedBy: req.user.id, detail, ...extra })
@@ -40,6 +44,13 @@ const fail = (res, errors) => res.status(400).json({ error: Object.values(errors
 // Scope target and sprint must be in the org. Returns { errors } or { sprintEnd }.
 async function checkRefs(scope, body) {
   const org = { orgId: { $in: idsOf(scope) } };
+  // QA4 M-37(b): a Manager's challenge stays inside the projects they manage
+  if (scope.pfilter.managerId) {
+    const ps = await Project.find(scope.pfilter, "_id members").lean();
+    const ownsAll = (await Project.countDocuments({ ...org, isDeleted: { $ne: true }, status: { $ne: "Deleted" }, managerId: { $nin: [scope.pfilter.managerId, null] } })) === 0; // projects nobody manages do not count against them
+    const err = managerScopeError(body.scope === "individual" ? { ...body, scopeRef: { id: body.scopeRef?.id } } : body, { ownsAll, projectIds: ps.map((x) => String(x._id)), userIds: [...new Set(ps.flatMap((x) => (x.members ?? []).map(String)))] });
+    if (err) return { errors: { scope: err } };
+  }
   const ref = body.scope === "individual" ? { kind: "user", id: body.scopeRef?.id } : body.scopeRef;
   if (body.scope !== "organisation" && ref?.id && valid(ref.id)) {
     const ok = ref.kind === "user" ? await User.exists({ _id: ref.id, ...org, status: "active", role: { $nin: LEADERS } })
@@ -66,7 +77,7 @@ const questOut = (q) => {
 };
 
 async function loadQuest(req, res, scope) {
-  const q = valid(req.params.id) ? await Quest.findOne({ _id: req.params.id, orgId: { $in: idsOf(scope) } }) : null;
+  const q = valid(req.params.id) ? await Quest.findOne({ _id: req.params.id, orgId: { $in: idsOf(scope) }, ...(scope.pfilter.managerId ? { createdBy: req.user.id } : {}) }) : null; // QA4: a Manager manages their own challenges
   if (!q) res.status(404).json({ error: "Challenge not found." });
   return q;
 }
@@ -76,7 +87,7 @@ export async function questOptions(req, res) {
   const scope = await scopeOr404(req, res); if (!scope) return;
   const org = { orgId: { $in: idsOf(scope) } };
   const [projects, teams, people, sprints] = await Promise.all([
-    Project.find({ ...org, isDeleted: { $ne: true }, status: { $nin: ["Archived", "Deleted", "Completed"] } }, "title").sort({ title: 1 }).lean(),
+    Project.find({ ...scope.pfilter, isDeleted: { $ne: true }, status: { $nin: ["Archived", "Deleted", "Completed"] } }, "title members").sort({ title: 1 }).lean(),
     Team.find({ ...org, status: { $ne: "archived" } }, "name").sort({ name: 1 }).lean(),
     User.find({ ...org, status: "active", role: { $nin: LEADERS } }, "name role").sort({ name: 1 }).lean(),
     Sprint.find({ ...org, status: { $ne: "Completed" }, endDate: { $ne: null } }, "name endDate projectId").sort({ endDate: 1 }).lean(),
@@ -84,8 +95,8 @@ export async function questOptions(req, res) {
   res.json({
     cap: rewardCap(scope.org), metrics: Object.entries(METRICS).map(([value, m]) => ({ value, label: m.label, unit: m.unit })),
     projects: projects.map((p) => ({ id: p._id, title: p.title })), teams: teams.map((t) => ({ id: t._id, name: t.name })),
-    people: people.map((u) => ({ id: u._id, name: u.name, role: u.role })), sprints: sprints.map((s) => ({ id: s._id, name: s.name, endDate: s.endDate })),
-    badges: BADGE_DEFINITIONS.map((b) => ({ id: b.id, name: b.name, rarity: b.rarity })),
+    people: people.filter((u) => !scope.pfilter.managerId || projects.some((pr) => (pr.members ?? []).map(String).includes(String(u._id)))).map((u) => ({ id: u._id, name: u.name, role: u.role })), sprints: sprints.map((s) => ({ id: s._id, name: s.name, endDate: s.endDate })),
+    badges: ELIGIBLE_BADGES.map((b) => ({ id: b.id, name: b.name, rarity: b.rarity })),
   });
 }
 
@@ -190,6 +201,10 @@ export async function publishQuest(req, res) {
   const entry = entryFor(q), participants = entry === "join" ? [] : inScope;
   const reasons = publishBlockers(q, { participants: inScope.length });
   if (reasons.length) return res.status(409).json({ error: reasons[0], reasons });
+  if (scope.pfilter.managerId && q.status === "draft") { // QA4 M-37: weekly reward budget of a Manager
+    const used = weeklyBudgetUsed(await Quest.find({ createdBy: req.user.id, status: { $in: ["active", "completed", "expired"] }, publishedAt: { $gte: new Date(Date.now() - 7 * 86_400_000) } }, "rewardXp participants publishedAt").lean());
+    if (used + q.rewardXp * inScope.length > MANAGER_WEEKLY_XP_BUDGET) return res.status(409).json({ error: `This would promise more than your weekly reward budget (${MANAGER_WEEKLY_XP_BUDGET} XP). Lower the reward or the number of people, or ask the Director.`, code: "REWARD_BUDGET" });
+  }
   const done = await Quest.findOneAndUpdate({ _id: q._id, status: "draft" },
     { $set: { status: "active", entry, participants, progress: [], publishedAt: new Date(), seriesId: q.repeat ? q._id : null } }, { returnDocument: "after" });
   if (!done) return res.status(409).json({ error: "Only a draft can be published." });
@@ -224,7 +239,7 @@ export async function duplicateQuest(req, res) {
 
 // ════════════════════════════ Anomalies ═════════════════════════════════════
 
-const flagMatch = (scope, extra = {}) => ({ orgId: { $in: idsOf(scope) }, "reviewFlags.0": { $exists: true }, ...extra });
+const flagMatch = (scope, extra = {}) => ({ orgId: { $in: idsOf(scope) }, ...(scope.pids ? { projectId: { $in: scope.pids } } : {}), "reviewFlags.0": { $exists: true }, ...extra });
 
 // Awards a flag is about: the named person, or every award of the task (task-wide flags).
 const awardsFor = (taskId, flag) => XpLog.find({ taskId, source: "task_approved", ...(flag.userId ? { userId: flag.userId } : {}) }).lean();
@@ -302,7 +317,7 @@ export async function anomalyCount(req, res) {
 
 async function loadFlag(req, res, scope, fields = "") {
   if (!valid(req.params.flagId)) { res.status(404).json({ error: "Flag not found." }); return null; }
-  const task = await Task.findOne({ orgId: { $in: idsOf(scope) }, "reviewFlags._id": req.params.flagId }, `title status projectId assignee assignees submittedAt reviewedAt completedAt reviewedBy qualityScore tlScore reviewFlags ${fields}`).lean();
+  const task = await Task.findOne({ orgId: { $in: idsOf(scope) }, ...(scope.pids ? { projectId: { $in: scope.pids } } : {}), "reviewFlags._id": req.params.flagId }, `title status projectId assignee assignees submittedAt reviewedAt completedAt reviewedBy qualityScore tlScore reviewFlags ${fields}`).lean();
   if (!task) { res.status(404).json({ error: "Flag not found." }); return null; }
   return { task, flag: task.reviewFlags.find((f) => String(f._id) === req.params.flagId) };
 }

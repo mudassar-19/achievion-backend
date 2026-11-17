@@ -23,19 +23,22 @@ const IS_OID = /^[0-9a-f]{24}$/i;
 const OPEN = { $ne: "Done" };
 const LEADERS = ["Director", "Manager"];
 
-export async function orgScope(orgId) {
+// QA4 D-QA4-8: pass the caller (req.user) and `pfilter` is the filter for PROJECT queries: a Manager gets only the projects they manage
+// (server enforced); the Director and everyone else get the whole org. `filter` stays org-wide for other collections.
+export async function orgScope(orgId, user = null) {
   const org = await Organization.findOne(IS_OID.test(orgId) ? { _id: orgId } : { orgId }, "_id orgId extensionRules workingTime workloadThresholdPct alertSettings").lean();
   if (!org) return null;
   const ids = [String(org._id), ...(org.orgId ? [org.orgId] : [])];
-  return { org, filter: { orgId: { $in: ids } } };
+  const filter = { orgId: { $in: ids } };
+  return { org, filter, pfilter: user?.role === "Manager" ? { ...filter, managerId: user.id } : filter };
 }
 
 // Loads the project for :id inside the caller's org, or answers 404 and returns null.
 async function loadProject(req, res, fields) {
   if (!mongoose.isValidObjectId(req.params.id)) { res.status(404).json({ error: "Project not found." }); return null; }
-  const scope = await orgScope(req.user.orgId);
+  const scope = await orgScope(req.user.orgId, req.user);
   if (!scope) { res.status(404).json({ error: "Organization not found." }); return null; }
-  const project = await Project.findOne({ _id: req.params.id, ...scope.filter, isDeleted: { $ne: true } }, fields).lean();
+  const project = await Project.findOne({ _id: req.params.id, ...scope.pfilter, isDeleted: { $ne: true } }, fields).lean();
   if (!project) { res.status(404).json({ error: "Project not found." }); return null; }
   return { project, org: scope.org };
 }
@@ -57,10 +60,10 @@ const orgMember = (orgId, userId) => (IS_OID.test(String(userId ?? ""))
 // ── GET /api/manager/projects/list ───────────────────────────────────────────
 export async function listProjects(req, res) {
   const q = parseListQuery(req.query);
-  const scope = await orgScope(req.user.orgId);
+  const scope = await orgScope(req.user.orgId, req.user);
   if (!scope) return res.status(404).json({ error: "Organization not found." });
 
-  const filter = { ...scope.filter, isDeleted: { $ne: true } };
+  const filter = { ...scope.pfilter, isDeleted: { $ne: true } };
   filter.status = q.archived ? "Archived" : (q.status.length ? { $in: q.status } : { $nin: ["Archived", "Deleted"] });
   if (q.priority.length) filter.priority = { $in: q.priority };
   if (q.search) filter.title = { $regex: q.search, $options: "i" };
@@ -194,6 +197,7 @@ export async function addMember(req, res) {
   if (!user) return res.status(400).json({ error: "Pick a team member from your organization." });
   if ((loaded.project.members ?? []).some((m) => String(m) === String(user._id))) return res.status(409).json({ error: `${user.name} is already on this project.` });
   await Project.updateOne({ _id: loaded.project._id }, { $addToSet: { members: user._id } });
+  await Project.updateOne({ _id: loaded.project._id, "formerMembers.userId": user._id }, { $set: { "formerMembers.$[f].readdedAt": new Date() } }, { arrayFilters: [{ "f.userId": user._id, "f.readdedAt": null }] }).catch(() => {}); // QA4 Y-8: history reconnects
   audit(loaded.org, req, loaded.project, "project_member_added", `${user.name} (${user.role}) added to "${loaded.project.title}".`, { targetUserId: user._id });
   createNotification({ userId: user._id, orgId: req.user.orgId, type: "project_member_added", title: "Added to a project",
     message: `You were added to "${loaded.project.title}".`, meta: { projectId: loaded.project._id } }).catch(() => {});
@@ -232,7 +236,7 @@ export async function getModules(req, res) {
     ]),
   ]);
   const byMod = Object.fromEntries(counts.map((c) => [String(c._id), c]));
-  const wt = orgWorkTime((await orgScope(req.user.orgId))?.org), now = new Date(); // item 58: working days next to the date
+  const wt = orgWorkTime((await orgScope(req.user.orgId, req.user))?.org), now = new Date(); // item 58: working days next to the date
   res.json({ modules: mods.map((m) => {
     const c = byMod[String(m._id)] ?? { total: 0, done: 0 };
     return {
@@ -258,6 +262,7 @@ export async function assignModuleLead(req, res) {
   if (dueDate && Number.isNaN(+due)) return res.status(400).json({ error: "The module deadline is not a valid date." });
   if (due && loaded.project.deadline && due > loaded.project.deadline) return res.status(400).json({ error: "The module deadline cannot be after the project deadline." });
 
+  if (mod.teamLeadId && String(mod.teamLeadId) !== String(lead._id)) return res.status(409).json({ error: "This module already has a Team Lead. Use Change Team Lead (with a reason).", code: "USE_CHANGE_LEAD" }); // QA4 Y-6
   const before = mod.teamLeadId ? String(mod.teamLeadId) : null;
   mod.teamLeadId = lead._id;
   if (due) { mod.dueDate = due; mod.endDate = due; }

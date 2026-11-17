@@ -26,9 +26,9 @@ async function context(req, res, { needProject = false } = {}) {
   for (const k of ["project", "sprint", "member"]) if (req.query[k] && !IS_OID.test(String(req.query[k]))) { res.status(404).json({ error: `That ${k} was not found.` }); return null; }
   if (req.query.sprint && !q.project) { res.status(400).json({ error: "Pick a project before a sprint." }); return null; }
   if (needProject && !q.project) { res.status(400).json({ error: "Pick a project to see its lessons." }); return null; }
-  const scope = await orgScope(req.user.orgId);
+  const scope = await orgScope(req.user.orgId, req.user);
   if (!scope) { res.status(404).json({ error: "Organization not found." }); return null; }
-  const projects = await Project.find({ ...scope.filter, isDeleted: { $ne: true }, status: { $ne: "Deleted" } }, "_id title status members startDate createdAt").lean();
+  const projects = await Project.find({ ...scope.pfilter, isDeleted: { $ne: true }, status: { $ne: "Deleted" } }, "_id title status members startDate createdAt").lean();
   const project = q.project ? projects.find((p) => String(p._id) === q.project) : null;
   if (q.project && !project) { res.status(404).json({ error: "Project not found." }); return null; }
   const sprint = q.sprint ? await Sprint.findOne({ _id: q.sprint, projectId: project._id, ...scope.filter }, "name status tasks startDate endDate").lean() : null;
@@ -60,9 +60,9 @@ export const getLessons   = tab("lessons");
 
 // ── GET /api/manager/reports/options  (filter choices: projects + their sprints) ──
 export async function getOptions(req, res) {
-  const scope = await orgScope(req.user.orgId);
+  const scope = await orgScope(req.user.orgId, req.user);
   if (!scope) return res.status(404).json({ error: "Organization not found." });
-  const projects = await Project.find({ ...scope.filter, isDeleted: { $ne: true }, status: { $ne: "Deleted" } }, "_id title status").sort({ title: 1 }).lean();
+  const projects = await Project.find({ ...scope.pfilter, isDeleted: { $ne: true }, status: { $ne: "Deleted" } }, "_id title status").sort({ title: 1 }).lean();
   const sprints = await Sprint.find({ ...scope.filter, projectId: { $in: projects.map((p) => p._id) } }, "_id name status projectId startDate").sort({ startDate: -1 }).lean();
   res.json({
     projects: projects.map((p) => ({ id: p._id, title: p.title, status: p.status })),
@@ -131,9 +131,9 @@ export async function createLesson(req, res) {
   if (error) return res.status(400).json({ error, fields: { text: error } });
   const projectId = String(req.body.project ?? ""), sprintId = req.body.sprint ? String(req.body.sprint) : null;
   if (!IS_OID.test(projectId) || (sprintId && !IS_OID.test(sprintId))) return res.status(404).json({ error: "Project not found." });
-  const scope = await orgScope(req.user.orgId);
+  const scope = await orgScope(req.user.orgId, req.user);
   if (!scope) return res.status(404).json({ error: "Organization not found." });
-  const project = await Project.findOne({ _id: projectId, ...scope.filter, isDeleted: { $ne: true } }, "_id title").lean();
+  const project = await Project.findOne({ _id: projectId, ...scope.pfilter, isDeleted: { $ne: true } }, "_id title").lean();
   if (!project) return res.status(404).json({ error: "Project not found." });
   if (sprintId && !(await Sprint.exists({ _id: sprintId, projectId: project._id, ...scope.filter }))) return res.status(404).json({ error: "Sprint not found in this project." });
   const lesson = await Lesson.create({ orgId: String(scope.org._id), projectId: project._id, sprintId, text: value.text, createdBy: req.user.id, updatedBy: req.user.id });
@@ -143,7 +143,7 @@ export async function createLesson(req, res) {
 
 async function loadLesson(req, res) {
   if (!mongoose.isValidObjectId(req.params.id)) { res.status(404).json({ error: "Note not found." }); return null; }
-  const scope = await orgScope(req.user.orgId);
+  const scope = await orgScope(req.user.orgId, req.user);
   if (!scope) { res.status(404).json({ error: "Organization not found." }); return null; }
   const lesson = await Lesson.findOne({ _id: req.params.id, ...scope.filter });
   if (!lesson) { res.status(404).json({ error: "Note not found." }); return null; }

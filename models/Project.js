@@ -109,6 +109,8 @@ const projectSchema = new Schema(
     // ── Team allocation ───────────────────────────────────────────────────────
     teamId:  { type: Types.ObjectId, ref: "Team", default: null, index: true },
     members: [{ type: Types.ObjectId, ref: "User" }],
+    // QA4 Y-8: people taken off the project; their past work stays with them and shows "Former member".
+    formerMembers: [{ userId: { type: Types.ObjectId, ref: "User" }, removedAt: Date, removedBy: { type: Types.ObjectId, ref: "User" }, reason: String, readdedAt: { type: Date, default: null }, _id: false }],
 
     visibility: {
       type:    String,

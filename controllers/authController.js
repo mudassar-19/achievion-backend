@@ -16,6 +16,7 @@ import AuditLog           from "../models/AuditLog.js";
 import Session            from "../models/Session.js";
 import { levelFromTotalXp } from "../services/xpEngine.js";
 import { isOnTime } from "../services/onTimeRule.js";
+import { propagateRename } from "../services/propagation.js";
 
 const SALT_ROUNDS  = 12;
 const PASSWORD_MIN = 8;
@@ -332,8 +333,11 @@ export async function updateMe(req, res) {
     return res.status(400).json({ error: "No valid fields to update." });
   }
 
+  const before = updates.name ? (await User.findById(req.user.id, "name").lean())?.name : null;
   const user = await User.findByIdAndUpdate(req.user.id, { $set: updates }, { returnDocument: "after" });
   if (!user) return res.status(404).json({ error: "User not found." });
+  if (before && before !== user.name) await User.updateOne({ _id: user._id }, { $addToSet: { previousNames: before } }); // QA4 Y-2: append-only text is corrected on read
+  if (before && before !== user.name) await propagateRename({ orgId: user.orgId, oldName: before, newName: user.name }).catch((e) => console.error("[propagate]", e.message)); // QA4 Y-2
 
   res.json({ success: true, user: sanitize(user, null, await gamiOf(user._id)) });
 }

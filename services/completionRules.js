@@ -28,3 +28,11 @@ export function moduleOverdueDays({ endDate, status }, now = new Date()) {
   const d = Math.floor((+new Date(now) - (+new Date(endDate) + DAY)) / DAY) + 1;
   return d > 0 ? d : 0;
 }
+
+// QA4 M-43: the date hierarchy task due <= module due <= project due (the task side is in taskDueError). Dates may be strings or Dates.
+export function moduleDateError({ start, due }, projectDeadline) {
+  const day = (d) => (d ? new Date(d).toISOString().slice(0, 10) : null), s = day(start), e = day(due), p = day(projectDeadline);
+  if (s && e && e < s) return "A module cannot end before it starts.";
+  if (e && p && e > p) return `A module cannot end after the project's deadline (${p}). Extend the project first.`;
+  return null;
+}

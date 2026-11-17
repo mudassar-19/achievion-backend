@@ -36,3 +36,12 @@ export function auditSentence(r) {
   const tail = change ? `: ${change}` : detail ? `: ${detail.replace(/^Extension approved:\s*/, "")}` : "";
   return `${who} ${phrase}${subject ? ` ${subject}` : ""}${tail}`;
 }
+
+// QA4 M-39: what a Manager's Activity may show. View as, session and organisation set-up events are for the Director / Org admin (and the person viewed).
+export const HIDDEN_FROM_MANAGER = ["view_as_started", "view_as_ended", "company_community_created", "company_members_added", "workspace_updated", "settings_updated", "ORG_CREATED", "DIRECTOR_CREATED", "DIRECTOR_SETUP", "GAMIFICATION_RESET"];
+// A Manager sees their own actions and the events of the projects they manage (e.g. their reports, their extension requests); other roles see all but the hidden kinds.
+export function activityQuery({ role, userId, orgOid, projectIds = [] }) {
+  const q = { orgId: orgOid, action: { $nin: HIDDEN_FROM_MANAGER }, scope: { $ne: "session" } };
+  if (role === "Manager") q.$or = [{ performedBy: { $in: [].concat(userId) } }, { targetProjectId: { $in: projectIds } }];
+  return q;
+}
