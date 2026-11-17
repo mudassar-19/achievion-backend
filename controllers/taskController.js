@@ -92,6 +92,7 @@ import { startInPast } from "../services/startDateRules.js";
 import { subtaskHoursError, parentHoursError } from "../services/subtaskHours.js";
 import { timeLogLock, executionLock, alreadySubmitted } from "../services/taskLocks.js";
 import Milestone from "../models/Milestone.js";
+import { dueAfterModuleEnd } from "../services/completionRules.js";
 
 // QA2-68/69: planning is allowed; start, time log and submit wait for the started project and the accepted module.
 async function executionBlock(task) {
@@ -139,6 +140,13 @@ const JUNIOR_SENIOR = {
 const VALID_STATUSES = ["Backlog", "To-Do", "In-Progress", "In-Review", "Done"];
 
 // ── POST /api/tasks ───────────────────────────────────────────────────────────
+// C-2: a task may not be due after the end of its module (else the module looks on track while it is already late).
+export async function dueAfterModuleMessage(milestoneId, due) {
+  if (!milestoneId || !due || !mongoose.isValidObjectId(milestoneId)) return null;
+  const m = await Milestone.findById(milestoneId, "title dueDate").lean();
+  return dueAfterModuleEnd(due, m?.dueDate) ? `The due date is after the end of the module "${m.title}". Pick a date on or before the module's end date, or ask the Manager to extend the module.` : null;
+}
+
 export async function createTask(req, res) {
   const {
     title, description, type, priority,
@@ -169,7 +177,9 @@ export async function createTask(req, res) {
   }
   const { error: linkErr, links } = await resolveLinks(req.user.orgId, { parentId, dependsOn });
   if (linkErr) return res.status(400).json({ error: linkErr });
-  const over = await subtaskHoursLimit(req.user.orgId, { parentId, hours: estimatedHours }); // item 51
+  const afterEnd = await dueAfterModuleMessage(milestoneId, dueDate ?? deadline); // C-2
+  if (afterEnd) return res.status(400).json({ error: afterEnd, fields: { deadline: afterEnd } });
+  const over =await subtaskHoursLimit(req.user.orgId, { parentId, hours: estimatedHours }); // item 51
   if (over) return res.status(400).json({ error: over.message, fields: { estimatedHours: over.message }, parentId: over.parentId });
 
   // ── Director cannot assign tasks ──────────────────────────────────────────

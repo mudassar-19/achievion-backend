@@ -5,28 +5,28 @@ import ChatCommunity from "../models/ChatCommunity.js";
 import ChatChannel from "../models/ChatChannel.js";
 import AuditLog from "../models/AuditLog.js";
 import User from "../models/User.js";
+import { DEFAULT_GROUPS } from "./chatDefaults.js";
 
+// D-QA3B-5: the default groups are Announcements, General and Leadership (chatDefaults.js). #random is no longer seeded; an old one is kept.
 export const COMPANY = {
-  name: "Company", icon: "🏢", type: "organization", description: "Everyone in the organisation.",
-  groups: [
-    { name: "announcements", icon: "📢", type: "announcement", description: "Official announcements. Everyone reads; Director and Manager post.", send: "admins" },
-    { name: "general", icon: "💬", type: "general", description: "Open chat for everyone.", send: "everyone" },
-    { name: "random", icon: "🎲", type: "general", description: "Anything else, open to everyone.", send: "everyone" },
-  ],
+  name: "Company", icon: "building", type: "organization", description: "Everyone in the organisation.",
+  groups: DEFAULT_GROUPS,
 };
 const ids = (list) => (list ?? []).map((x) => String(x?._id ?? x));
 const eligible = (e) => !e.status || e.status === "active";
+const LEADER_ROLES = ["Director", "Manager"];
 
 // employees: [{ _id, role, status? }] → what is missing. community / channels are null / [] when nothing exists yet.
 export function companyGaps({ community, channels, employees }) {
   const everyone = employees.filter(eligible).map((e) => String(e._id));
+  const leaders = employees.filter((e) => eligible(e) && LEADER_ROLES.includes(e.role)).map((e) => String(e._id));
   const inCom = new Set(ids(community?.memberIds));
   const byName = new Map((channels ?? []).map((c) => [c.name, c]));
   const createGroups = COMPANY.groups.map((g) => g.name).filter((n) => !byName.has(n));
   const addToGroups = {};
   for (const [name, ch] of byName) {
     const have = new Set(ids(ch.memberIds));
-    const missing = everyone.filter((id) => !have.has(id));
+    const missing = (name === "leadership" ? leaders : everyone).filter((id) => !have.has(id));
     if (missing.length) addToGroups[name] = missing;
   }
   return { createCommunity: !community, createGroups, addToCommunity: everyone.filter((id) => !inCom.has(id)), addToGroups };
@@ -67,7 +67,7 @@ export async function ensureCompany(orgOid, { actorId = null } = {}) {
     await ChatCommunity.updateOne({ _id: community._id }, { $addToSet: { memberIds: { $each: g.addToCommunity } } });
   }
   for (const def of COMPANY.groups.filter((d) => g.createGroups.includes(d.name))) {
-    await ChatChannel.create({ orgId: orgOid, communityId: community._id, name: def.name, description: def.description, icon: def.icon, type: def.type, memberIds: everyone,
+    await ChatChannel.create({ orgId: orgOid, communityId: community._id, name: def.name, description: def.description, icon: def.icon, type: def.type, memberIds: def.leadersOnly ? leaderIds : everyone,
       adminIds: leaderIds, createdBy: director._id, isDefault: true, permissions: { sendMessages: def.send, editInfo: "admins", addMembers: "admins" } });
   }
   for (const [name, missing] of Object.entries(g.addToGroups)) await ChatChannel.updateOne({ communityId: community._id, name }, { $addToSet: { memberIds: { $each: missing } } });

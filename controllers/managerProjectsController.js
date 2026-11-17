@@ -14,6 +14,7 @@ import ExtensionRequest from "../models/ExtensionRequest.js";
 import { createNotification } from "./notificationController.js";
 import { healthForProjects }  from "../services/projectHealthService.js";
 import { orgWorkTime, workingDaysLeft } from "../services/workloadRules.js";
+import { moduleOverdueDays } from "../services/completionRules.js";
 import { setupState, NOT_MEMBER_ROLES } from "../services/projectSetupRules.js";
 import { parseListQuery, validateProjectInput, extensionDecision, archiveTransition, PAGE_SIZE } from "../services/projectRules.js";
 import { isDisagreement } from "../services/aiEvalRules.js";
@@ -236,7 +237,7 @@ export async function getModules(req, res) {
     const c = byMod[String(m._id)] ?? { total: 0, done: 0 };
     return {
       id: m._id, title: m.title, description: m.description, status: m.status, dueDate: m.dueDate, roles: m.activeRoles ?? [],
-      workingDaysLeft: workingDaysLeft(now, m.dueDate, wt),
+      workingDaysLeft: workingDaysLeft(now, m.dueDate, wt), overdueDays: moduleOverdueDays({ endDate: m.dueDate, status: m.status }, now),
       tasks: c.total, done: c.done, progressPct: c.total ? Math.round((c.done / c.total) * 100) : 0,
       teamLead: m.teamLeadId ? { id: m.teamLeadId._id, name: m.teamLeadId.name } : null,
     };

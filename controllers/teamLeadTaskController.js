@@ -9,7 +9,7 @@ import User from "../models/User.js";
 import Milestone from "../models/Milestone.js";
 import AuditLog from "../models/AuditLog.js";
 import OperationalRequest from "../models/OperationalRequest.js";
-import { createTask, resolveLinks, commentMembers, subtaskHoursLimit, parentHoursLimit } from "./taskController.js";
+import { dueAfterModuleMessage, createTask, resolveLinks, commentMembers, subtaskHoursLimit, parentHoursLimit } from "./taskController.js";
 import { REACTIONS } from "../services/commentRules.js";
 import { getTaskDetail as mgrTaskDetail, orgScope } from "./managerProjectsController.js";
 import { startInPast } from "../services/startDateRules.js";
@@ -115,9 +115,13 @@ export async function xpEstimate(req, res) {
 
 // ── PATCH /api/teamlead/tasks/:id/edit ──────────────────────────────────────
 export async function editTask(req, res) {
-  const task = await Task.findById(req.params.id, "status projectId deadline title startDate estimatedHours parentId").lean();
+  const task = await Task.findById(req.params.id, "status projectId milestoneId deadline title startDate estimatedHours parentId").lean();
   if (task.status === "Done") return res.status(409).json({ error: "A done task cannot be edited." });
   const { errors, value } = validateTaskInput(req.body ?? {}, { mode: "edit" });
+  if (value.deadline && String(value.deadline) !== String(task.deadline ?? "")) { // C-2: only a changed date is checked
+    const afterEnd = await dueAfterModuleMessage(task.milestoneId, value.deadline);
+    if (afterEnd) errors.deadline = afterEnd;
+  }
   delete value.xpValue; delete errors.xpValue; // item 52 (D-527)
   // Item 51 (D-526): subtask hours may not exceed the parent's estimate, and a parent may not drop below its subtasks.
   if (value.estimatedHours !== undefined || req.body.parentId !== undefined) {

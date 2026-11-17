@@ -19,7 +19,7 @@ import { isReadOnly } from "../middleware/viewAs.js";
 import {
   METRICS, PAGE_SIZE, STATUSES, rewardCap, validateQuestInput, publishBlockers, editable, duplicateOf, progressPct,
 } from "../services/questRules.js";
-import { FLAG_KINDS, FLAG_LABEL, flagReason } from "../services/anomalyRules.js";
+import { FLAG_KINDS, FLAG_LABEL, flagReason, flagAgeDays, scoresText, REMIND_FLAG_DAYS } from "../services/anomalyRules.js";
 import { entryFor } from "../services/questJoinRules.js";
 
 const LEADERS = ["Director", "Manager"];
@@ -271,6 +271,8 @@ export async function listAnomalies(req, res) {
       people: [...new Set(people.map(String))].map((id) => ({ id, name: nameOf[id] ?? "Former member" })),
       xp: t.flag.xp ?? (mine.length ? mine.reduce((s, l) => s + l.amount, 0) : null),
       decidedBy: t.flag.status !== "open" && t.flag.reviewedBy ? nameOf[String(t.flag.reviewedBy)] ?? "Former member" : null, decidedAt: t.flag.status !== "open" ? t.flag.reviewedAt ?? null : null,
+      decisionNote: t.flag.status !== "open" ? t.flag.note || null : null, // QA3 G-16: why it was decided
+      ageDays: flagAgeDays(t.flag), waitingTooLong: (flagAgeDays(t.flag) ?? 0) >= REMIND_FLAG_DAYS, scores: scoresText(t.flag), // open flags show their age; a disagreement shows its numbers
     };
   });
 

@@ -7,7 +7,9 @@ import Project from "../models/Project.js";
 import Task from "../models/Task.js";
 import { orgScope } from "./managerProjectsController.js";
 import { isRankable, rankRows, rankChange, scopesFor, MIN_PEOPLE, publicRow } from "../services/leaderboardRules.js";
-import { periodSince, groupXpBySource } from "../services/leaderboardXp.js";
+import { periodSince, groupXpBySource, withResidual } from "../services/leaderboardXp.js";
+import { onTimeExpr } from "../services/onTimeRule.js";
+import { orgTimezone } from "../services/orgTimezone.js";
 
 // ── Static badge catalog ──────────────────────────────────────────────────────
 // `progressType` drives the server-side progress engine (see computeBadgeProgress).
@@ -254,6 +256,7 @@ export async function getLeaderboard(req, res) {
 
   const weekAgo = new Date(Date.now() - 7 * 86_400_000);
   const since = periodSince(period); // item 36: XP, its sources and Tasks done all use this one cut-off
+  const tz = await orgTimezone(orgId);
   const [weekXp, doneAgg, srcAgg] = await Promise.all([
     XpLog.aggregate([{ $match: { userId: { $in: userIds }, createdAt: { $gte: weekAgo }, amount: { $gt: 0 } } }, { $group: { _id: "$userId", xp: { $sum: "$amount" } } }]),
     Task.aggregate([
@@ -262,7 +265,7 @@ export async function getLeaderboard(req, res) {
       { $addFields: { people: { $setUnion: [{ $ifNull: ["$assignees", []] }, { $cond: [{ $ifNull: ["$assignee", false] }, ["$assignee"], []] }] } } },
       { $unwind: "$people" }, { $match: { people: { $in: userIds } } }, { $addFields: { assignees: "$people" } },
       { $group: { _id: "$assignees", done: { $sum: 1 }, judged: { $sum: { $cond: [{ $ifNull: ["$deadline", false] }, 1, 0] } },
-        onTime: { $sum: { $cond: [{ $and: [{ $ifNull: ["$deadline", false] }, { $lte: ["$completedAt", "$deadline"] }] }, 1, 0] } } } },
+        onTime: { $sum: { $cond: [{ $and: [{ $ifNull: ["$deadline", false] }, onTimeExpr(tz)] }, 1, 0] } } } }, // QA3 decision 7
     ]),
     XpLog.aggregate([{ $match: { userId: { $in: userIds }, ...(since ? { createdAt: { $gte: since } } : {}) } }, { $group: { _id: { u: "$userId", s: "$source" }, xp: { $sum: "$amount" } } }]),
   ]);
@@ -281,7 +284,7 @@ export async function getLeaderboard(req, res) {
     const onTimePct = d?.judged ? Math.round((d.onTime / d.judged) * 100) : null;
     // Batch 3 (E4): public fields only, with the avatar the person equipped (else the default).
     return publicRow({ userId: uid, name: u.name ?? "—", role: u.role ?? "", roleLabel: u.roleLabel ?? null, avatarStyle: p.avatarStyle, avatarSeed: p.avatarSeed ?? null, level: p.level ?? 1,
-      xp, rankXp: xp, xpBySource: groupXpBySource(srcRows.get(uid) ?? []), totalXp, monthlyXp, weeklyXp, tasksCompleted, onTimePct, completionRate: onTimePct ?? 0,
+      xp, rankXp: xp, xpBySource: period === "all" ? withResidual(groupXpBySource(srcRows.get(uid) ?? []), totalXp) : groupXpBySource(srcRows.get(uid) ?? []), totalXp, monthlyXp, weeklyXp, tasksCompleted, onTimePct, completionRate: onTimePct ?? 0,
       streak: p.streaks?.daily ?? 0, longestStreak: p.longestDaily ?? 0, previousStreak: p.previousDaily ?? 0, isUser: uid === String(userId),
       shopEquipped: p.shopEquipped instanceof Map ? Object.fromEntries(p.shopEquipped) : (p.shopEquipped ?? {}) });
   }).sort((a, b) => a.name.localeCompare(b.name));

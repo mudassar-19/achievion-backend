@@ -4,6 +4,8 @@ import Project      from "../models/Project.js";
 import Organization from "../models/Organization.js";
 import AuditLog     from "../models/AuditLog.js";
 import mongoose     from "mongoose";
+import { onTimeExpr } from "../services/onTimeRule.js";
+import { orgTimezone } from "../services/orgTimezone.js";
 
 const IS_OID   = /^[0-9a-f]{24}$/i;
 const orgFilter = (orgId) => IS_OID.test(orgId) ? { _id: orgId } : { orgId };
@@ -52,7 +54,7 @@ async function calcProgress(goal) {
 
   if (metric === "on_time_pct") {
     const [onTime, total] = await Promise.all([
-      Task.countDocuments({ ...taskFilter, $expr: { $lte: ["$completedAt", "$deadline"] } }),
+      Task.countDocuments({ ...taskFilter, deadline: { $ne: null }, $expr: onTimeExpr(await orgTimezone(orgId)) }),
       Task.countDocuments(taskFilter),
     ]);
     return total > 0 ? Math.round((onTime / total) * 100) : 0;

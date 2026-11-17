@@ -87,7 +87,7 @@ export async function getProjectOverview(req, res) {
     progress: pct(t.done, t.total),
     modules: { total: moduleList.length, done: count("Done"), running: count("Running"), remaining: count("Not started") },
     tasks: { total: t.total, done: t.done, inProgress: t.inProgress, inReview: t.inReview, todo: t.todo, backlog: t.backlog, overdue: t.overdue },
-    hours: { planned: round1(t.plannedHours), open: round1(t.openHours), logged: round1(t.loggedHours) },
+    hours: { planned: round1(t.plannedHours), open: round1(t.openHours), logged: round1(t.loggedHours), tracked: t.loggedHours > 0 }, // QA3 C-12: tracked=false reads "Not tracked", never "Logged 0 h"
     moduleList,
     risks: risks.map((r) => ({ id: r._id, title: r.title, category: r.category ?? null, rating: r.score ?? null })),
     extensions: extensions.map((e) => ({
@@ -138,7 +138,7 @@ export async function getProjectModule(req, res) {
     startDate: mod.startDate ?? null, dueDate: mod.dueDate ?? null, completedAt: mod.completedAt ?? null,
     teamLead: person(mod.teamLeadId), acceptedAt: mod.tlAcceptedAt ?? null,
     progress: { total: c.total, done: c.done, inProgress: c.inProgress, inReview: c.inReview, todo: c.todo, backlog: c.backlog, overdue: c.overdue, pct: pct(c.done, c.total) },
-    hours: { planned: round1(c.plannedHours), open: round1(c.openHours), logged: round1(c.loggedHours) },
+    hours: { planned: round1(c.plannedHours), open: round1(c.openHours), logged: round1(c.loggedHours), tracked: c.loggedHours > 0 },
     health: health(c, mod.startDate, mod.dueDate, now),
     avgQuality: scored.length >= MIN_SCORED ? { avg: Math.round(scored.reduce((a, b) => a + b, 0) / scored.length), count: scored.length } : null,
     tasks: rows,

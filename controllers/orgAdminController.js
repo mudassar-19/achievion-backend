@@ -95,7 +95,8 @@ export async function getDashboard(req, res) {
     membersByRole[cat] = (membersByRole[cat] ?? 0) + 1;
   });
 
-  const recentMembers = members.slice(0, 5).map(sanitizeUser);
+  // QA3 A-13: newest first, and a clear order when many people share one creation time (name A to Z).
+  const recentMembers = [...members].sort((a, b) => +new Date(b.createdAt) - +new Date(a.createdAt) || String(a.name).localeCompare(String(b.name))).slice(0, 5).map(sanitizeUser);
 
   return res.json({
     success: true,
@@ -360,6 +361,8 @@ export async function listOrgApprovals(req, res) {
   const approvals = await Approval.find(filter)
     .select("-payload.password -payload.passwordHash -payload.resetCodeHash")
     .populate("targetEmployeeId", "name email role")
+    .populate("requestedBy", "name")  // QA3 A-6 / P-7: the list and the PDF say who asked and who decided
+    .populate("resolvedBy", "name")
     .sort({ createdAt: -1 });
 
   return res.json({ success: true, data: approvals.map(sanitizeApproval) });

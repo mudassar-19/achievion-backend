@@ -10,8 +10,11 @@ export function projectHealth({ startDate, deadline, now = new Date(), progressP
   const expectedPct = Number.isFinite(s) && Number.isFinite(e) && e > s ? clamp(((t - s) / (e - s)) * 100, 0, 100) : null;
   const behind = expectedPct === null ? 0 : Math.max(0, expectedPct - (Number(progressPct) || 0));
   const overdueRatio = openTasks > 0 ? clamp(overdueTasks / openTasks, 0, 1) : 0;
-  const score = Math.round(clamp(100 - behind - 50 * overdueRatio, 0, 100));
-  return { score, band: healthBand(score), expectedPct: expectedPct === null ? null : Math.round(expectedPct), behind: Math.round(behind), overdueRatio };
+  let score = Math.round(clamp(100 - behind - 50 * overdueRatio, 0, 100));
+  // C-3: past the deadline with work still open can never read "On track" (96% done and 3 days late is At risk, not green).
+  const daysPast = Number.isFinite(e) && openTasks > 0 && t > e + 86_400_000 ? Math.floor((t - e) / 86_400_000) : 0;
+  if (daysPast > 0) score = Math.min(score, 60);
+  return { score, band: healthBand(score), expectedPct: expectedPct === null ? null : Math.round(expectedPct), behind: Math.round(behind), overdueRatio, daysPastDeadline: daysPast };
 }
 
 export const healthBand = (score) => (score >= 70 ? "On track" : score >= 40 ? "At risk" : "Off track");

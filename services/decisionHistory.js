@@ -9,6 +9,7 @@ export function decisionRow(a) {
   return {
     id: String(a._id), actionType: a.actionType, action: ACTION[a.actionType] ?? a.actionType, status: a.status,
     target: t?.name ?? p.name ?? "Unknown", targetRole: t?.role ?? p.role ?? null,
+    change: p.oldRole && p.newRole ? `${p.oldRole} to ${p.newRole}` : null,   // A-5: "Tester to Junior Tester", not only the new role
     requesterReason: p.reason ?? null,                                // why the Org admin asked (mandatory for suspend and delete)
     directorNote: a.directorNote ?? a.rejectionReason ?? null,       // the Director's note (optional on approve, mandatory on reject)
     requestedAt: a.createdAt ?? null, decidedAt: a.resolvedAt ?? null, decidedBy: a.resolvedBy?.name ?? null,

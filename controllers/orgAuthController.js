@@ -65,6 +65,7 @@ function sanitizeOrg(org) {
     status:                org.status,
     directorSetupComplete: org.directorSetupComplete ?? false,
     createdAt:             org.createdAt,
+    timezone:              org.workingTime?.timezone ?? "Asia/Karachi", // QA3 P-6: PDF dates in the org time zone
   };
 }
 

@@ -6,8 +6,10 @@ import Notification     from "../models/Notification.js";
 import User             from "../models/User.js";
 import { dailyCapUsd } from "../services/aiCap.js";
 import { periodFor, recapCards, aiRecapSummary } from "../services/recapService.js";
-import { periodRange } from "../services/recapMetrics.js";
+import { periodRange, completedPeriodFor, weekDay, weekSoFarText } from "../services/recapMetrics.js";
 import { citationUrl } from "../services/citationUrl.js";
+import { computeOrgHealth } from "../services/orgHealthService.js";
+import { bandOf } from "../services/orgHealthRules.js";
 import { rebalanceBasis } from "../services/heatmapRules.js";
 
 const IS_OID = /^[0-9a-f]{24}$/i;
@@ -36,11 +38,18 @@ export async function explainChart(req, res) {
 
   try {
     const prompt = getPrompt("explain-chart");
+    // QA3 G-3: for Org Health the numbers come from the server (points per factor, bands, inputs), never from what the page sent.
+    let payload = data ?? {};
+    if (chart === "org-health") {
+      const h = await computeOrgHealth(orgId);
+      payload = { overall: h.overall, band: bandOf(h.overall), note: "The factors' points add up to the overall score. For 'Risk control' a HIGHER score means FEWER open risks (good).",
+        factors: h.explain.map(({ label, score, band, weightPct, points, input, enough }) => ({ label, score, band, weightPct, points, enough, input })) };
+    }
     const result = await callChain({
       feature: "explain", orgId, requestedBy: userId,
       promptId: prompt.id, promptVersion: prompt.version,
       systemPrompt: prompt.system,
-      userMessage:  prompt.userTemplate({ chart, ...(data ?? {}) }),
+      userMessage:  prompt.userTemplate({ chart, ...payload }),
       validate: prompt.validate,
     });
     res.json({ explanation: result.text, aiGenerated: true });
@@ -109,8 +118,11 @@ export async function weeklySummary(req, res) {
   // given this week's real numbers (before, it was given only the organisation id and had nothing to say).
   const org = await Organization.findOne(orgFilter(orgId), "_id").lean();
   if (!org) return res.status(404).json({ error: "Organization not found." });
-  const period = periodFor("weekly");
+  // QA3 G-18 (decision 6): the AI summarises the last COMPLETED week only. The running week gets plain "so far" numbers and no comparison.
+  const period = completedPeriodFor("weekly");
   const cards = await recapCards(org, period);
+  const running = periodFor("weekly"), day = weekDay();
+  const weekSoFar = { day, period: periodRange(running.start, running.end), text: weekSoFarText(await recapCards(org, running), day) };
   const r = await aiRecapSummary({ orgId, userId, periodLabel: `Weekly recap, ${periodRange(period.start, period.end)}`, cards });
   if (!r.text) {
     const E = { not_configured: [503, "AI is not configured."], cap: [429, "The daily AI limit is reached. Try again tomorrow."], busy: [502, "The AI is busy right now. Try again in a moment."] }[r.error];
@@ -118,7 +130,7 @@ export async function weeklySummary(req, res) {
   }
   // Store as fyi Notification for the Director
   await Notification.create({ userId, orgId, type: "system", tier: "fyi", title: "Weekly AI Summary", message: `[AI-generated] ${r.text}` });
-  res.json({ summary: r.text, period: periodRange(period.start, period.end), aiGenerated: true });
+  res.json({ summary: r.text, period: periodRange(period.start, period.end), label: "Last week", weekSoFar, aiGenerated: true });
 }
 
 // ── GET /api/director/ai/status ──────────────────────────────────────────────

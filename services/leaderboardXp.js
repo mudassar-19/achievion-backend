@@ -19,3 +19,9 @@ export function periodSince(period, now = new Date()) {
   if (period === "month") return new Date(now.getFullYear(), now.getMonth(), 1);
   return null;
 }
+
+// QA3 B-21: the parts shown must add up to the total. XP that was written to the profile without a ledger row shows as its own part.
+export function withResidual(parts, total) {
+  const gap = total - parts.reduce((a, p) => a + p.xp, 0);
+  return gap === 0 ? parts : [...parts, { label: "Earlier XP (not itemised)", xp: gap }];
+}

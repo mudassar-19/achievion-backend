@@ -4,12 +4,12 @@ import Organization from "../models/Organization.js";
 import User from "../models/User.js";
 import Task from "../models/Task.js";
 import Risk from "../models/Risk.js";
-import Team from "../models/Team.js";
 import Project from "../models/Project.js";
 import OrgHealthSnapshot from "../models/OrgHealthSnapshot.js";
 import { healthForProjects } from "./projectHealthService.js";
-import { orgWorkTime, teamWeeklyCapacity } from "./workloadRules.js";
-import { deliveryScore, capacityScore, riskScore, combineFactors } from "./orgHealthRules.js";
+import { orgWeekLoadPct } from "./capacity.js";
+import { deliveryScore, capacityScore, riskScore, combineFactors, explainFactors } from "./orgHealthRules.js";
+import { onTimeExpr } from "./onTimeRule.js";
 import { orgQualityFactor } from "./orgQuality.js";
 
 const IS_OID = /^[0-9a-f]{24}$/i;
@@ -31,22 +31,15 @@ export async function computeOrgHealth(orgId, now = new Date()) {
     Task.aggregate([{ $match: { projectId: { $in: projects.map((p) => p._id) } } }, { $group: { _id: "$projectId", h: { $sum: { $ifNull: ["$estimatedHours", 0] } } } }]),
     Task.countDocuments({ orgId: oid, status: "Done", deadline: { $ne: null } }),
   ]);
+  // QA3 G-5: how many of those were on time under the one on-time rule; shown as an input of the Delivery factor.
+  const onTimeDone = await Task.countDocuments({ orgId: oid, status: "Done", deadline: { $ne: null }, completedAt: { $ne: null }, $expr: onTimeExpr(org.workingTime?.timezone) });
   const hours = Object.fromEntries(hoursAgg.map((r) => [String(r._id), r.h]));
   const delivery = deliveryScore(projects.map((p) => ({ score: health.get(String(p._id))?.score ?? null, hours: hours[String(p._id)] ?? 0 })));
 
   // Capacity (RND-04): this week's planned hours (open tasks due this week) over the teams' weekly capacity, as in the heat map.
-  const { hoursPerDay, workingDays } = orgWorkTime(org);
-  const teams = await Team.find({ orgId: oid, status: { $ne: "archived" } }).select("members").lean();
-  const weekStart = new Date(now); weekStart.setHours(0, 0, 0, 0);
-  weekStart.setDate(weekStart.getDate() - (weekStart.getDay() === 0 ? 6 : weekStart.getDay() - 1));
-  const weekEnd = new Date(weekStart); weekEnd.setDate(weekStart.getDate() + 6); weekEnd.setHours(23, 59, 59, 999);
-  const [planned] = await Task.aggregate([
-    { $match: { orgId: oid, teamId: { $in: teams.map((t) => t._id) }, status: { $ne: "Done" }, deadline: { $gte: weekStart, $lte: weekEnd }, estimatedHours: { $gt: 0 } } },
-    { $group: { _id: null, total: { $sum: "$estimatedHours" } } },
-  ]);
-  const avail = teams.reduce((s, t) => s + teamWeeklyCapacity({ memberCount: t.members?.length ?? 0, hoursPerDay, workingDays }), 0);
-  const withMembers = teams.filter((t) => t.members?.length).length;
-  const capacity = avail > 0 ? capacityScore(((planned?.total ?? 0) / avail) * 100) : null;
+  const load = await orgWeekLoadPct(org, now); // G-1: same function as the heatmap and the Manager's workload
+  const withMembers = load.teamsWithMembers;
+  const capacity = load.pct != null ? capacityScore(load.pct) : null;
 
   // Risk (RND-05): open high (score >= 15) and medium (8-14); No data when none was ever logged.
   const [high, medium, everLogged] = await Promise.all([
@@ -65,7 +58,9 @@ export async function computeOrgHealth(orgId, now = new Date()) {
     quality,
   });
   const subScores = Object.fromEntries(Object.entries(r.factors).map(([k, f]) => [k, f.score]));
-  return { ...r, subScores };
+  // QA3 G-3 / G-5: points and inputs per factor (the screen, the AI text and the "How calculated?" panel all read these).
+  const explain = explainFactors(r, { delivery: { doneWithDeadline, onTimeDone }, capacity: { pct: load.pct }, risk: { high, medium }, quality });
+  return { ...r, subScores, explain };
 }
 
 // Stores one snapshot (the manual button and the weekly job). overall stays null when there is not enough data.

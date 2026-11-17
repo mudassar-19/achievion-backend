@@ -7,7 +7,7 @@ import User          from "../models/User.js";
 import Notification  from "../models/Notification.js";
 import mongoose      from "mongoose";
 import * as R        from "../services/chatRules.js";
-import { orgUserIds, chatAudit, addToCommunity, roleOf, unreadCounts } from "../services/chatService.js";
+import { orgUserIds, chatAudit, addToCommunity, roleOf, unreadCounts, lastMessages } from "../services/chatService.js";
 import { getIo }     from "../utils/io.js";
 import { withDmPeers } from "../services/dmPeer.js";
 import { notifyChat, markChatNoticesRead } from "../services/chatNotify.js";
@@ -49,7 +49,8 @@ export async function getChannels(req, res) {
   // Item 76 (D-544): every DM carries the other person (name, role, avatar), so no screen has to show "dm-<id>-<id>".
   const peerIds = [...new Set(channels.filter((c) => c.type === "dm").flatMap((c) => c.memberIds.map(String)).filter((id) => id !== String(userId)))];
   const peers = new Map((await User.find({ _id: { $in: peerIds }, orgId, status: { $ne: "deleted" } }, "name role avatarStyle avatarSeed").lean()).map((u) => [String(u._id), u]));
-  const withUnread = withDmPeers(channels.map((ch) => ({ ...ch, unread: counts[String(ch._id)] ?? 0 })), userId, peers);
+  const last = await lastMessages(channels);
+  const withUnread = withDmPeers(channels.map((ch) => ({ ...ch, unread: counts[String(ch._id)] ?? 0, lastMessage: last[String(ch._id)] ?? null })), userId, peers);
 
   res.json(withUnread);
 }
@@ -329,7 +330,9 @@ export async function getMembers(req, res) {
 
   const or = [{ _id: { $in: channel.memberIds ?? [] } }];
   if (channel.type !== "dm") or.push({ orgId, role: { $in: ["Director", "Manager"] } });
-  const members = await User.find({ $or: or, status: { $ne: "deleted" } }, "name role avatarStyle avatarSeed department").lean();
+  // E-1 (D-QA3B-7): an open group (nobody listed, everyone can read it) has the whole organisation as members, not only the leaders.
+  if (R.legacyOpen(channel)) or.push({ orgId, role: { $ne: "org_admin" } });
+  const members = await User.find({ $or: or, status: { $ne: "deleted" } }, "name role roleLabel avatarStyle avatarSeed department").lean();
   const posters = new Set((channel.posterIds ?? []).map(String));
   res.json(members.map((m) => ({
     ...m,
@@ -525,13 +528,12 @@ export async function getOrCreateDm(req, res) {
 export async function searchUsers(req, res) {
   const { orgId } = req.user;
   const q = (req.query.q ?? "").trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  if (!q) return res.json([]);
   // S10 (D-167): only leads see and search by email.
-  const fields = coworkerFields(req.user.role);
-  const users = await User.find(
-    { orgId, _id: { $ne: req.user.id }, status: { $ne: "deleted" }, $or: [{ name: { $regex: q, $options: "i" } }, ...(fields.includes("email") ? [{ email: { $regex: q, $options: "i" } }] : [])] },
-    fields.replace(" department", "")
-  ).limit(30).lean(); // items 73/74: never yourself; 30 so prefix matches are not cut off before the client ranks them
+  const fields = coworkerFields(req.user.role) + " roleLabel";
+  // E-3 (D-QA3B-4): an empty search lists the whole organisation A-Z (the person picks from the list); typing filters it.
+  const where = { orgId, _id: { $ne: req.user.id }, status: { $nin: ["deleted", "suspended"] }, role: { $ne: "org_admin" } };
+  if (q) where.$or = [{ name: { $regex: q, $options: "i" } }, ...(fields.includes("email") ? [{ email: { $regex: q, $options: "i" } }] : [])];
+  const users = await User.find(where, fields).sort({ name: 1 }).limit(q ? 30 : 100).lean(); // items 73/74: never yourself; 30 so prefix matches are not cut off before the client ranks them
   res.json(users);
 }
 

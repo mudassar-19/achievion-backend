@@ -1,5 +1,6 @@
 import User               from "../models/User.js";
 import { createNotification } from "./notificationController.js";
+import { orgLeaderIds } from "../services/chatService.js";
 import { firstLengthError } from "../services/textLimits.js";
 import { validateProjectInput } from "../services/projectRules.js";
 import Task               from "../models/Task.js";
@@ -433,10 +434,13 @@ export async function createProject(req, res) {
 
   // Auto-create Project Community + default groups (idempotent)
   const memberOids  = Array.isArray(project.members) ? project.members : [];
-  const adminOids   = [userId];
   const projSlug    = project.title.toLowerCase().replace(/[^a-z0-9]+/g, "-");
   (async () => {
     try {
+      // D-QA3B-5: the Director and every Manager are in every project community and group (admins); Leadership is theirs alone.
+      const leaderIds = await orgLeaderIds(String(org._id));
+      const adminOids = [...new Set([String(userId), ...leaderIds])];
+      const everyone  = [...new Set([String(userId), ...leaderIds, ...memberOids.map(String)])];
       // Find or create the community for this project
       let community = await ChatCommunity.findOne({ orgId: org._id, projectId: project._id });
       if (!community) {
@@ -449,15 +453,17 @@ export async function createProject(req, res) {
           projectId:  project._id,
           createdBy:  userId,
           adminIds:   adminOids,
-          memberIds:  [...new Set([userId, ...memberOids.map(String)])],
+          memberIds:  everyone,
         });
       }
 
-      // Default groups: announcements + general (others can be created by manager/team lead)
+      // Default groups: announcements + general + leadership (others can be created by manager/team lead)
       const defaultGroups = [
-        { name: `${projSlug}-announcements`, icon: "📢", type: "announcement",
+        { name: `${projSlug}-announcements`, icon: "megaphone", type: "announcement",
           permissions: { sendMessages: "admins", editInfo: "admins", addMembers: "admins" }, isDefault: true },
-        { name: `${projSlug}-general`,       icon: "💬", type: "project",
+        { name: `${projSlug}-general`,       icon: "chat", type: "project",
+          permissions: { sendMessages: "everyone", editInfo: "admins", addMembers: "admins" } },
+        { name: `${projSlug}-leadership`,    icon: "shield", type: "custom", leadersOnly: true,
           permissions: { sendMessages: "everyone", editInfo: "admins", addMembers: "admins" } },
       ];
       await Promise.all(defaultGroups.map((def) =>
@@ -469,9 +475,9 @@ export async function createProject(req, res) {
             name:        def.name,
             icon:        def.icon,
             type:        def.type,
-            description: def.name.endsWith("-announcements") ? `Announcements for ${project.title}` : `General discussion — ${project.title}`,
+            description: def.name.endsWith("-announcements") ? `Announcements for ${project.title}` : def.leadersOnly ? `Director and Managers of ${project.title}` : `General discussion — ${project.title}`,
             projectId:   project._id,
-            memberIds:   [...new Set([userId, ...memberOids.map(String)])],
+            memberIds:   def.leadersOnly ? [...new Set([String(userId), ...leaderIds])] : everyone,
             adminIds:    adminOids,
             permissions: def.permissions,
             isDefault:   def.isDefault ?? false,

@@ -6,6 +6,7 @@ import WellbeingSnapshot from "../models/WellbeingSnapshot.js";
 import { snapshotWellbeing } from "../services/reportService.js";
 import { computeOrgHealth, saveSnapshot, orgFilter } from "../services/orgHealthService.js";
 import { WEIGHTS, MIN_SAMPLES, MIN_FACTORS } from "../services/orgHealthRules.js";
+import { onTimeExpr } from "../services/onTimeRule.js";
 
 // ── GET /api/director/org-health ──────────────────────────────────────────────
 // Item 18 / RND-08: `overall` is null with status "not_enough_data" unless 3 of 4 factors have their minimum sample.
@@ -15,7 +16,8 @@ export async function getOrgHealth(req, res) {
   res.json({
     overall: h.overall, status: h.status, subScores: h.subScores, factors: h.factors, present: h.present,
     weights: WEIGHTS, minSamples: MIN_SAMPLES, minFactors: MIN_FACTORS,
-    assumptionNote: "Default weights: Delivery 35 / Capacity 25 / Risk 20 / Quality 20. They are our design choice, checked by a sensitivity test (docs/rnd/ORG_HEALTH_RND.md).",
+    explain: h.explain, bands: { healthy: 75, attention: 50 }, // QA3 G-3 / G-5: points, band and inputs per factor
+    assumptionNote: "Default weights: Delivery 35 / Capacity 25 / Risk control 20 / Quality 20. They are a design choice, checked by a sensitivity test whose result is under How is this calculated?",
   });
 }
 
@@ -52,7 +54,7 @@ export async function getDeptDetail(req, res) {
   const memberIds = members.map(m => m._id);
 
   const [onTime, totalDone, reworked, totalTasks, qualAgg, workloadAgg] = await Promise.all([
-    Task.countDocuments({ orgId: oid, assignees: { $in: memberIds }, status: { $in: ["Done"] }, $expr: { $and: [{ $ne: ["$completedAt", null] }, { $ne: ["$deadline", null] }, { $lte: ["$completedAt", "$deadline"] }] } }),
+    Task.countDocuments({ orgId: oid, assignees: { $in: memberIds }, status: { $in: ["Done"] }, $expr: { $and: [{ $ne: ["$completedAt", null] }, { $ne: ["$deadline", null] }, onTimeExpr(org.workingTime?.timezone)] } }),
     Task.countDocuments({ orgId: oid, assignees: { $in: memberIds }, status: "Done", deadline: { $ne: null } }),
     Task.countDocuments({ orgId: oid, assignees: { $in: memberIds }, resubmissionCount: { $gt: 0 } }),
     Task.countDocuments({ orgId: oid, assignees: { $in: memberIds } }),

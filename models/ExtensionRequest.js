@@ -17,7 +17,7 @@ const extensionRequestSchema = new Schema(
 
     status: {
       type:    String,
-      enum:    ["pending", "approved", "rejected", "counter_proposed", "auto_applied"],
+      enum:    ["pending", "approved", "rejected", "counter_proposed", "auto_applied", "expired"],
       default: "pending",
       index:   true,
     },
@@ -29,6 +29,7 @@ const extensionRequestSchema = new Schema(
     counterDays:       { type: Number, default: null },  // counter-propose: N days instead
 
     autoApplied: { type: Boolean, default: false },
+    reminderSentAt: { type: Date, default: null }, // C-6: one reminder after 3 days without a decision
 
     // Notification sent flag (avoids double-notify)
     notified: { type: Boolean, default: false },

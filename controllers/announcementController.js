@@ -22,7 +22,7 @@ async function visible(req) {
   const user = { id: req.user.id, role: req.user.role };
   const all = await ChatChannel.find({ orgId: OID(req.user.orgId), type: "announcement", isArchived: { $ne: true } }).lean();
   const channels = all.filter((c) => R.canView(c, user));
-  const communities = await ChatCommunity.find({ _id: { $in: channels.map((c) => c.communityId).filter(Boolean) } }, "name type").lean();
+  const communities = await ChatCommunity.find({ _id: { $in: channels.map((c) => c.communityId).filter(Boolean) } }, "name type memberIds").lean();
   return { user, channels, communities };
 }
 
@@ -30,8 +30,8 @@ export async function getAnnouncements(req, res) {
   const { user, channels, communities } = await visible(req);
   const messages = await ChatMessage.find({ channelId: { $in: channels.map((c) => c._id) }, deletedAt: null }, "channelId sender content createdAt readBy")
     .populate("sender", "name role").sort({ createdAt: -1 }).limit(200).lean();
-  const items = feedItems({ messages, channels, communities, meId: user.id });
   const canPost = canPostAnnouncement(user.role);
+  const items = feedItems({ messages, channels, communities, meId: user.id, leader: canPost });
   res.json({ items, unread: items.filter((i) => i.unread).length, canPost, targets: canPost ? postTargets({ channels: channels.filter((c) => R.canSend(c, user)), communities }) : [] });
 }
 

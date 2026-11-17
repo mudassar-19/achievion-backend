@@ -18,6 +18,8 @@ const DIRECTOR = [
   G("project_at_risk", "Project at risk", "A project's health falls into At risk or Off track.", ["project_at_risk"]),
   G("org_health_drop", "Org health drop", "The organisation health score drops.", ["org_health_drop"]),
   G("recap_ready", "Recap ready", "A weekly or monthly recap is ready to read.", ["recap_ready"]),
+  G("mention", "Chat mentions", "Someone names you in a chat message.", ["mention"]), // QA3 B-20 (FR09-02): chat has its own switches
+  G("direct_messages", "Direct messages", "Someone sends you a direct message.", ["dm_message"]),
   G("system_incident", "System incident", "A problem with the system itself.", ["system_incident"]),
 ];
 const TEAM_LEAD = [

@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import { completionBlockers } from "../services/completionRules.js";
 import { reviewAudit } from "./taskController.js";
 import { approvalBlock } from "../services/reviewRules.js";
 import { sortAlerts } from "../services/teamLeadRules.js";
@@ -211,7 +212,11 @@ export async function updateMilestone(req, res) {
   for (const key of allowed) {
     if (req.body[key] !== undefined) updates[key] = req.body[key];
   }
-  if (req.body.status === "Completed") updates.completedAt = new Date();
+  if (req.body.status === "Completed") {
+    updates.completedAt = new Date();
+    const blockers = completionBlockers({ openTasks: await Task.countDocuments({ milestoneId, status: { $ne: "Done" } }) }); // C-1
+    if (blockers.length) return res.status(409).json({ error: `This module cannot be finished yet. ${blockers.join(" ")}`, code: "open_work", blockers });
+  }
 
   if (!Object.keys(updates).length) return res.status(400).json({ error: "No valid fields provided." });
 

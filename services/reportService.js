@@ -10,6 +10,7 @@ import Notification from "../models/Notification.js";
 import ExtensionRequest from "../models/ExtensionRequest.js";
 import GamificationProfile from "../models/GamificationProfile.js";
 import Lesson from "../models/Lesson.js";
+import { activeMembers } from "./activeMembers.js";
 import WellbeingSnapshot from "../models/WellbeingSnapshot.js";
 import Organization from "../models/Organization.js";
 import { velocity } from "./sprintRules.js";
@@ -125,12 +126,14 @@ export async function buildXp(ctx) {
 
 // ── Well-being (aggregate only) ─────────────────────────────────────────────
 // Members without a profile yet count with the defaults (HP 100, no streak).
+// G-7: "members" = active employees; people with no profile yet are NOT counted healthy: they show as "not tracked yet".
 async function wellbeingOf(users) {
   const profiles = await GamificationProfile.find({ userId: { $in: users.map((u) => u._id) } }, "userId hp streaks.daily").lean();
   const by = new Map(profiles.map((p) => [String(p.userId), p]));
-  return wellbeing(users.map((u) => by.get(String(u._id)) ?? {}));
+  const tracked = users.filter((u) => by.has(String(u._id)));
+  return { ...wellbeing(tracked.map((u) => by.get(String(u._id)))), members: users.length, tracked: tracked.length };
 }
-const orgWellbeing = async (orgFilter) => wellbeingOf(await User.find({ ...orgFilter, status: { $ne: "deleted" }, role: { $nin: LEADERS } }, "_id").lean());
+const orgWellbeing = async (orgFilter) => wellbeingOf(await activeMembers(orgFilter.orgId.$in, { employeesOnly: true }, "_id"));
 
 export async function snapshotWellbeing(org, now = new Date()) {
   const ids = [String(org._id), ...(org.orgId ? [org.orgId] : [])];

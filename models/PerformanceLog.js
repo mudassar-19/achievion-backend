@@ -9,6 +9,7 @@ const performanceLogSchema = new Schema(
     page:       { type: String, default: null, maxlength: 200 },
     userAgent:  { type: String, default: null, maxlength: 300 },
     seeded:     { type: Boolean, default: false },
+    coldStart:  { type: Boolean, default: false }, // QA3 G-9: server had just woken up (see perfLogController)
   },
   { timestamps: true }
 );

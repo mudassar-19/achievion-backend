@@ -57,7 +57,7 @@ export function viewAsGuard(req, res, next) {
   const d = guardDecision({ method: req.method, path: req.originalUrl, viewAs });
   if (d.block) {
     _logBlocked(decoded, req);
-    return res.status(d.block.status).json({ error: d.block.error, code: "view_as_read_only" });
+    return res.status(d.block.status).json({ error: d.block.error, code: "VIEW_ONLY" });
   }
   if (!d.readOnly) return next();
   const origJson = res.json.bind(res);

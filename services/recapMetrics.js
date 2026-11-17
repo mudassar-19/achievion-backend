@@ -34,3 +34,28 @@ export function periodRange(start, end) {
   const f = (d, y) => new Date(d).toLocaleDateString("en-GB", { day: "numeric", month: "short", ...(y ? { year: "numeric" } : {}), timeZone: "UTC" });
   return `${f(start)} – ${f(end, true)}`;
 }
+
+const DAY = 86_400_000;
+// QA3 G-17: a recap covers a COMPLETED period (UTC; weeks run Monday to Sunday), never the one that is still running.
+export function completedPeriodFor(type, now = new Date()) {
+  const y = now.getUTCFullYear(), m = now.getUTCMonth();
+  if (type === "monthly") return { start: new Date(Date.UTC(y, m - 1, 1)), end: new Date(Date.UTC(y, m, 1) - 1) };
+  if (type === "yearly") return { start: new Date(Date.UTC(y - 1, 0, 1)), end: new Date(Date.UTC(y, 0, 1) - 1) };
+  const thisMonday = Date.UTC(y, m, now.getUTCDate() - ((now.getUTCDay() + 6) % 7));
+  return { start: new Date(thisMonday - 7 * DAY), end: new Date(thisMonday - 1) };
+}
+
+// Day number (1 = Monday .. 7 = Sunday) inside the running week.
+export const weekDay = (now = new Date()) => ((now.getUTCDay() + 6) % 7) + 1;
+
+// QA3 G-18 (decision 6): the running week gets plain numbers so far. No comparison with a finished week, no alarming words.
+export function weekSoFarText(cards, day) {
+  const v = (title) => cards.find((c) => c.title === title)?.metric?.value;
+  const parts = [
+    v("Tasks delivered") != null && s(v("Tasks delivered"), "task", "tasks") + " finished",
+    v("XP earned") != null && `${v("XP earned")} XP earned`,
+    v("Active members") != null && s(v("Active members"), "person", "people") + " active",
+    v("Pending approvals") != null && s(v("Pending approvals"), "request", "requests") + " waiting for a decision",
+  ].filter(Boolean);
+  return `Week so far (day ${day} of 7): ${parts.join(", ")}. The week is not over, so there is nothing to compare yet.`;
+}

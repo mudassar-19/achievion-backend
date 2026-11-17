@@ -1,6 +1,7 @@
 // LB-1: ONE place that says how far a module is. Progress is always computed from its tasks (done / all),
 // never from the stored Milestone.progress field (nothing keeps that one up to date).
 import Task from "../models/Task.js";
+import { moduleOverdueDays } from "./completionRules.js";
 
 export const pct = (done, total) => (total > 0 ? Math.round((done / total) * 100) : 0);
 
@@ -33,6 +34,6 @@ export async function projectProgressByIds(projectIds) {
 export async function applyTaskProgress(milestones) {
   const list = milestones.filter(Boolean);
   const prog = await moduleProgressByIds(list.map((m) => m._id));
-  for (const m of list) m.progress = prog.get(String(m._id)).pct;
+  for (const m of list) { m.progress = prog.get(String(m._id)).pct; m.overdueDays = moduleOverdueDays({ endDate: m.dueDate, status: m.status }); } // C-2: "Module overdue N days"
   return milestones;
 }

@@ -38,13 +38,16 @@ function ai(cases) {
 function speed(perfRows) {
   const T = TARGETS.speed, perAction = {};
   for (const action of PERF_ACTIONS) {
-    const rows = perfRows.filter((r) => (r.action ?? r.actionName) === action);
-    const n = rows.length, progress = `${Math.min(n, T.minSamples)} of ${T.minSamples} samples`;
-    if (n === 0) { perAction[action] = { status: "NO DATA", n, p95: null, progress }; continue; }
-    if (n < T.minSamples) { perAction[action] = { status: "IN PROGRESS", n, p95: null, progress }; continue; }
-    const ms = rows.map((r) => r.durationMs).sort((a, b) => a - b), p95 = ms[Math.min(Math.floor(n * 0.95), n - 1)];
-    if (rows.every((r) => r.seeded === true)) { perAction[action] = { status: "NOT VERIFIED", n, p95, progress, seeded: true, reason: "Seeded sample data, not a real measurement" }; continue; }
-    perAction[action] = { status: p95 <= T.p95Ms ? "VERIFIED" : "NOT VERIFIED", n, p95, progress };
+    // QA3 G-9: samples taken while the free-tier server was just waking up (coldStart) are shown on their own and do not decide the p95.
+    const mine = perfRows.filter((r) => (r.action ?? r.actionName) === action);
+    const rows = mine.filter((r) => r.coldStart !== true), cold = mine.filter((r) => r.coldStart === true);
+    const p95Of = (list) => { const ms = list.map((r) => r.durationMs).sort((a, b) => a - b); return ms.length ? ms[Math.min(Math.floor(ms.length * 0.95), ms.length - 1)] : null; };
+    const n = rows.length, progress = `${Math.min(n, T.minSamples)} of ${T.minSamples} samples`, coldInfo = { coldN: cold.length, coldP95: p95Of(cold) };
+    if (n === 0) { perAction[action] = { status: "NO DATA", n, p95: null, progress, ...coldInfo }; continue; }
+    if (n < T.minSamples) { perAction[action] = { status: "IN PROGRESS", n, p95: null, progress, ...coldInfo }; continue; }
+    const p95 = p95Of(rows);
+    if (rows.every((r) => r.seeded === true)) { perAction[action] = { status: "NOT VERIFIED", n, p95, progress, seeded: true, reason: "Seeded sample data, not a real measurement", ...coldInfo }; continue; }
+    perAction[action] = { status: p95 <= T.p95Ms ? "VERIFIED" : "NOT VERIFIED", n, p95, progress, ...coldInfo };
   }
   const all = Object.values(perAction);
   const overall = all.every((a) => a.status === "NO DATA") ? "NO DATA" : all.every((a) => a.status === "VERIFIED") ? "VERIFIED"

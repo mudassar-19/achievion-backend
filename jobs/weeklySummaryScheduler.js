@@ -8,7 +8,8 @@
 import cron from "node-cron";
 import Organization from "../models/Organization.js";
 import Notification  from "../models/Notification.js";
-import { callAI }    from "../services/aiService.js";
+import { recapCards, aiRecapSummary } from "../services/recapService.js";
+import { periodRange, completedPeriodFor } from "../services/recapMetrics.js";
 
 function matchesSchedule(aiSettings, now) {
   const day  = now.getDay();  // 0=Sun … 6=Sat
@@ -18,9 +19,11 @@ function matchesSchedule(aiSettings, now) {
 
 async function runOnce(now) {
   // Item 42: the weekly AI summary is always on for every org (the toggle is gone from Settings; the stored flag is ignored).
-  const orgs = await Organization.find({}, "aiSettings _id").lean();
+  const orgs = await Organization.find({}, "aiSettings gamificationSettings _id").lean();
 
   for (const org of orgs) {
+    // QA3 B-29: Settings > Gamification > "Weekly recap" is the one switch. Off means no automatic weekly summary and no recap pop-up.
+    if (org.gamificationSettings?.recapEnabled === false) continue;
     const orgId    = String(org._id);
     const settings = org.aiSettings ?? {}; // old organisation documents may not have aiSettings at all
 
@@ -39,7 +42,11 @@ async function runOnce(now) {
 
     // Cost cap check via callAI (it throws 429 if over cap)
     try {
-      const result = await callAI({ feature: "weekly_summary", data: { orgId }, orgId, requestedBy: null });
+      // QA3 B-29 / G-18: the same summary as the Director's button: LAST COMPLETED week, real numbers, calm tone. Without AI the plain numbers are sent.
+      const period = completedPeriodFor("weekly", now), range = periodRange(period.start, period.end);
+      const cards = await recapCards(org, period);
+      const ai = await aiRecapSummary({ orgId, userId: null, periodLabel: `Weekly recap, ${range}`, cards });
+      const result = { text: ai.text ?? `Last week (${range}): ` + cards.filter((c) => c.metric?.value != null).slice(0, 4).map((c) => `${c.title.toLowerCase()} ${c.metric.value} ${c.metric.unit}`).join(", ") + ".", ai: !!ai.text };
 
       // Find Director of this org for the notification
       const { default: User } = await import("../models/User.js");
@@ -48,8 +55,8 @@ async function runOnce(now) {
         await Notification.create({
           userId: director._id, orgId,
           type: "system", tier: "fyi",
-          title: "Weekly AI Summary (auto)",
-          message: `[AI-generated] ${result.text}`,
+          title: "Weekly summary",
+          message: result.ai ? `[AI-generated] ${result.text}` : result.text,
         });
       }
 

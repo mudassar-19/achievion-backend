@@ -11,6 +11,7 @@ import Milestone from "../models/Milestone.js";
 import Project from "../models/Project.js";
 import User from "../models/User.js";
 import { effectiveDeadline } from "../services/streakService.js";
+import { needsFlagReminder, flagAgeDays, REMIND_FLAG_DAYS } from "../services/anomalyRules.js";
 
 const OPEN = ["Backlog", "To-Do", "In-Progress"];
 const recipients = (t) => deadlineAudience(t).assignees;
@@ -104,4 +105,23 @@ export function startDeadlineJobs() {
   const run = (name, fn) => fn().then((n) => n && console.log(`[deadline] ${name}: ${n}`)).catch((e) => console.error(`[deadline] ${name}:`, e.message));
   cron.schedule("5 * * * *",  () => run("alerts", sendDeadlineAlerts));      // hourly
   cron.schedule("10 0 * * *", () => run("missed", chargeMissedDeadlines));   // daily 00:10, after the streak/HP cron
+  cron.schedule("20 * * * *", () => run("flag reminders", remindStaleFlags)); // hourly: open review flags older than 3 days (QA3 G-16)
+}
+
+// QA3 G-16: an open review flag older than REMIND_FLAG_DAYS reminds the project's Manager once (remindedAt is set so it never repeats).
+export async function remindStaleFlags(now = new Date()) {
+  const since = new Date(+now - REMIND_FLAG_DAYS * 86_400_000);
+  const tasks = await Task.find({ reviewFlags: { $elemMatch: { status: "open", remindedAt: null, createdAt: { $lte: since } } } }, "title orgId projectId reviewFlags").lean();
+  let sent = 0;
+  for (const t of tasks) {
+    const project = await Project.findById(t.projectId, "managerId title").lean();
+    for (const f of t.reviewFlags.filter((x) => needsFlagReminder(x, now))) {
+      const claimed = await Task.updateOne({ _id: t._id, "reviewFlags._id": f._id, "reviewFlags.remindedAt": null }, { $set: { "reviewFlags.$.remindedAt": now } });
+      if (!claimed.modifiedCount || !project?.managerId) continue;
+      await Notification.create({ userId: project.managerId, orgId: String(t.orgId), type: "needs_action", tier: "needs_action", title: "Review flag is still open",
+        message: `A flag on "${t.title}"${project.title ? ` (${project.title})` : ""} has waited ${flagAgeDays(f, now)} days for a decision.`, meta: { taskId: t._id } });
+      sent++;
+    }
+  }
+  return sent;
 }

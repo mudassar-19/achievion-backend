@@ -7,6 +7,8 @@ import ExtensionRequest from "../models/ExtensionRequest.js";
 import { getPrompt } from "../ai/prompts/registry.js";
 import { callChain } from "./aiChain.js";
 import { buildRecapCards } from "./recapMetrics.js";
+import { onTimeExpr } from "./onTimeRule.js";
+import { orgTimezone } from "./orgTimezone.js";
 
 // Weekly = Monday to Sunday of the week containing `now`; monthly = the calendar month; yearly = the calendar year (UTC for the last two).
 export function periodFor(type, now = new Date()) {
@@ -29,6 +31,7 @@ export const previousPeriod = ({ start, end }) => { const len = +end - +start + 
 export async function gatherPeriod(org, { start, end }, now = new Date()) {
   const oid = String(org._id), range = { $gte: start, $lte: end };
   const upTo = (d) => new Date(Math.min(+d, +now));
+  const tz = org.workingTime?.timezone ?? await orgTimezone(org._id);
   const share = async (at) => {
     const total = await Task.countDocuments({ orgId: oid, createdAt: { $lte: at }, isDeleted: { $ne: true } });
     if (!total) return null;
@@ -39,7 +42,7 @@ export async function gatherPeriod(org, { start, end }, now = new Date()) {
   const [tasksDelivered, doneWithDeadline, onTimeDone, xp, people, extensions, pendingApprovals, progressStart, progressEnd] = await Promise.all([
     Task.countDocuments({ orgId: oid, status: "Done", completedAt: range }),
     Task.countDocuments({ orgId: oid, status: "Done", completedAt: range, deadline: { $ne: null } }),
-    Task.countDocuments({ orgId: oid, status: "Done", completedAt: range, deadline: { $ne: null }, $expr: { $lte: ["$completedAt", "$deadline"] } }),
+    Task.countDocuments({ orgId: oid, status: "Done", completedAt: range, deadline: { $ne: null }, $expr: onTimeExpr(tz) }), // QA3 decision 7
     XpLog.aggregate([{ $match: xpMatch }, { $group: { _id: null, total: { $sum: "$amount" } } }]),
     XpLog.distinct("userId", xpMatch),
     ExtensionRequest.countDocuments({ orgId: org._id, createdAt: range }),

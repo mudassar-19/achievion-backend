@@ -21,6 +21,7 @@ import {
 import {
   getProjectById,
   updateProjectStatus,
+  closeProjectWithOpenTasks,
   getMilestones,
   createMilestone,
   updateMilestone,
@@ -148,6 +149,7 @@ router.post("/ai/challenge-draft",                  mgr, ai.challengeDraft);
 router.post("/ai/tasks/:id/rebalance",              mgr, ai.rebalanceHint);
 router.post("/ai/anomalies/:flagId/explain",        mgr, ai.explainAnomaly);
 router.patch("/projects/:id/status",               updateProjectStatus);
+router.post("/projects/:id/close",                  closeProjectWithOpenTasks);
 router.get("/projects/:id/tasks",                   getProjectTasks);
 router.get("/projects/:id/milestones",               getMilestones);
 router.post("/projects/:id/milestones",              createMilestone);

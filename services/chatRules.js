@@ -23,7 +23,7 @@ export const isGroupAdmin = (group, user) =>
   group?.type !== "dm" && (isAlwaysMember(user.role) || has(group?.adminIds, user.id));
 
 // Pre-community org channels: open to the whole org when default or without a member list.
-const legacyOpen = (ch) => !ch?.communityId && ch?.type !== "dm" && (ch?.isDefault || !ch?.memberIds?.length);
+export const legacyOpen = (ch) => !ch?.communityId && ch?.type !== "dm" && (ch?.isDefault || !ch?.memberIds?.length);
 
 export function canView(channel, user) {
   if (channel?.type === "dm") return has(channel.memberIds, user.id);

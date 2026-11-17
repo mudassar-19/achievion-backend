@@ -30,6 +30,8 @@ export async function createPerfLog(req, res) {
     durationMs,
     page:       page   ? String(page).slice(0, 200)                  : null,
     userAgent:  req.headers["user-agent"] ? req.headers["user-agent"].slice(0, 300) : null,
+    // QA3 G-9: a process that started less than 3 minutes ago was woken up for this visit (free-tier cold start): reported separately.
+    coldStart:  process.uptime() < 180,
   });
 
   res.status(201).json({ ok: true });

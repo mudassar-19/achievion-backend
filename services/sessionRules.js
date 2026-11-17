@@ -6,6 +6,7 @@ export function deviceName(ua) {
   const s = String(ua ?? "");
   if (!s.trim()) return "Unknown device";
   if (/^curl\//i.test(s)) return "curl (command line)";
+  if (/^(node|undici)\b/i.test(s)) return "Test script"; // QA3 B-19: scripted logins (smoke and tests) say so instead of "Unknown device"
   const os = /iPhone/.test(s) ? "iPhone" : /iPad/.test(s) ? "iPad" : /Android/.test(s) ? "Android" : /Windows/.test(s) ? "Windows"
     : /Mac OS X|Macintosh/.test(s) ? "macOS" : /CrOS/.test(s) ? "ChromeOS" : /Linux/.test(s) ? "Linux" : null;
   const browser = /Edg\//.test(s) ? "Edge" : /OPR\/|Opera/.test(s) ? "Opera" : /Firefox\//.test(s) ? "Firefox"

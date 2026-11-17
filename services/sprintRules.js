@@ -1,5 +1,6 @@
 // Manager Sprints rules (V2 Phase 3 · M-3). Pure: no DB, no clock unless passed in.
 // DB status → UI label: Planning = Planned, Active / Under Review / Delayed = Active, Completed = Closed.
+import { isOnTime } from "./onTimeRule.js";
 export const PAGE_SIZE = 25;
 export const ACTIVE_STATUSES = ["Active", "Under Review", "Delayed"];
 export const OPEN_STATUSES = ["Planning", ...ACTIVE_STATUSES];
@@ -75,10 +76,10 @@ export const velocity = (tasks) => tasks.filter((t) => t.status === "Done").redu
 const finishedAt = (t) => toDate(t.firstSubmittedAt ?? t.submittedAt ?? t.completedAt);
 
 // Share of Done tasks with a deadline that were finished by it; null when none had a deadline.
-export function onTimePct(tasks) {
+export function onTimePct(tasks, tz) { // QA3 decision 7: deadline = end of that day in the org zone (default Karachi)
   const judged = tasks.filter((t) => t.status === "Done" && t.deadline && finishedAt(t));
   if (!judged.length) return null;
-  const onTime = judged.filter((t) => finishedAt(t) <= new Date(t.deadline)).length;
+  const onTime = judged.filter((t) => isOnTime(t.deadline, finishedAt(t), tz)).length;
   return Math.round((onTime / judged.length) * 100);
 }
 

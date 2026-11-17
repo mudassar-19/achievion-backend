@@ -56,6 +56,7 @@ const projectSchema = new Schema(
     startDate:  { type: Date, default: null },
     deadline:   { type: Date, default: null },
     archivedAt: { type: Date, default: null },
+    completedAt: { type: Date, default: null }, // C-1: set when the project becomes Completed (frozen health)
     statusBeforeArchive: { type: String, default: null }, // M-2: Restore puts this status back
 
     internalRef: { type: String, default: "", trim: true },

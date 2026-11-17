@@ -23,9 +23,12 @@ const taskSchema = new Schema(
     },
     status: {
       type:    String,
-      enum:    ["Backlog", "To-Do", "In-Progress", "In-Review", "Done"],
+      enum:    ["Backlog", "To-Do", "In-Progress", "In-Review", "Done", "Cancelled"],
       default: "To-Do",
     },
+    // C-1: set when a project/module is closed with open tasks. Cancelled tasks are hidden from every query below.
+    cancelReason: { type: String, default: null, maxlength: 500 },
+    cancelledAt:  { type: Date, default: null },
 
     // Org-scoped — every query filters by this first.
     orgId:     { type: String,         required: true, index: true },
@@ -110,6 +113,7 @@ const taskSchema = new Schema(
       by:        { type: Types.ObjectId, ref: "User" },
       status:    { type: String, enum: ["open", "dismissed", "confirmed"], default: "open" },
       createdAt: { type: Date, default: Date.now },
+      remindedAt: { type: Date, default: null }, // QA3 G-16: the Manager was reminded once that this flag is still open
       // M-5: per-award flags (xp_outlier, rubber_stamp, burst) name the person; disagreement is task-wide.
       userId:     { type: Types.ObjectId, ref: "User", default: null },
       xp:         { type: Number, default: null },
@@ -269,6 +273,17 @@ taskSchema.statics.logActivity = function (taskId, by, kind, extra = {}) {
   return this.updateOne({ _id: taskId }, { $push: { activity: { $each: [entry], $slice: -200 } } })
     .catch((e) => console.error("[activity]", e.message));
 };
+
+// C-1: Cancelled tasks are not work. Every find/count/aggregate skips them unless the query says
+// .setOptions({ withCancelled: true }). One hook instead of 30 `status` filters.
+taskSchema.pre(["find", "findOne", "countDocuments", "count", "distinct"], function () {
+  if (this.getOptions().withCancelled) return;
+  this.and([{ status: { $ne: "Cancelled" } }]);
+});
+taskSchema.pre("aggregate", function () {
+  if (this.options?.withCancelled) return;
+  this.pipeline().unshift({ $match: { status: { $ne: "Cancelled" } } });
+});
 
 taskSchema.index({ orgId: 1, status: 1 });
 taskSchema.index({ orgId: 1, deadline: 1, status: 1 });

@@ -4,6 +4,7 @@ import { Router } from "express";
 import { verifyToken, requireRole } from "../middleware/authMiddleware.js";
 import {
   getDashboard,
+  getDecisions,
   getDirectorProfile,
   getAnalytics,
   getTeam,
@@ -60,6 +61,7 @@ const router = Router();
 router.use(verifyToken, requireRole("Director"));
 
 router.get("/dashboard",                          getDashboard);
+router.get("/decisions",                          getDecisions);
 router.get("/profile",                            getDirectorProfile);
 router.get("/approvals/reviewed",                 getRecentlyReviewed);
 router.get("/analytics",                          getAnalytics);

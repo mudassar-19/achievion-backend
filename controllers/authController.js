@@ -15,6 +15,7 @@ import Approval           from "../models/Approval.js";
 import AuditLog           from "../models/AuditLog.js";
 import Session            from "../models/Session.js";
 import { levelFromTotalXp } from "../services/xpEngine.js";
+import { isOnTime } from "../services/onTimeRule.js";
 
 const SALT_ROUNDS  = 12;
 const PASSWORD_MIN = 8;
@@ -290,9 +291,7 @@ export async function getProfile(req, res) {
   if (!user) return res.status(404).json({ error: "User not found." });
 
   const doneTasks   = tasks.filter((t) => t.status === "Done");
-  const onTimeCount = doneTasks.filter(
-    (t) => t.deadline && new Date(t.completedAt ?? t.updatedAt) <= new Date(t.deadline)
-  ).length;
+  const onTimeCount = doneTasks.filter((t) => isOnTime(t.deadline, t.completedAt ?? t.updatedAt) === true).length; // QA3 decision 7
   const onTimePct   = doneTasks.length > 0
     ? Math.round((onTimeCount / doneTasks.length) * 100)
     : 0;
@@ -544,9 +543,7 @@ export async function getManagerProfileSummary(req, res) {
   const teamTasks = allTeamTasks.filter((t) => myProjectIds.has(t.projectId?.toString()));
   const doneTasks = teamTasks.filter((t) => t.status === "Done");
   const blockedTasks = teamTasks.filter((t) => t.status === "Blocked");
-  const onTimeTasks = doneTasks.filter(
-    (t) => t.deadline && new Date(t.completedAt ?? t.updatedAt) <= new Date(t.deadline)
-  );
+  const onTimeTasks = doneTasks.filter((t) => isOnTime(t.deadline, t.completedAt ?? t.updatedAt) === true); // QA3 decision 7
   const taskCompletionRatio = teamTasks.length > 0
     ? Math.round((doneTasks.length / teamTasks.length) * 100)
     : 0;

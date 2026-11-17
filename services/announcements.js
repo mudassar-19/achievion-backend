@@ -6,7 +6,8 @@ export const MAX_LEN = 2000;
 
 export const canPostAnnouncement = (role, text) => LEADERS.includes(role) && (text === undefined || (!!String(text).trim() && String(text).length <= MAX_LEN));
 
-export function feedItems({ messages, channels, communities, meId }) {
+// leader: Director/Manager also get the reach: audience (people in the group) and seen (how many opened it), E-13.
+export function feedItems({ messages, channels, communities, meId, leader = false }) {
   const ch = new Map(channels.map((c) => [String(c._id), c]));
   const com = new Map(communities.map((c) => [String(c._id), c]));
   return messages
@@ -15,6 +16,7 @@ export function feedItems({ messages, channels, communities, meId }) {
       id: m._id, text: m.content ?? "", at: m.createdAt, from: m.sender?.name ?? "Someone", role: m.sender?.role ?? null,
       community: com.get(String(ch.get(String(m.channelId)).communityId))?.name ?? "", channel: ch.get(String(m.channelId)).name,
       unread: !(m.readBy ?? []).map(String).includes(String(meId)),
+      ...(leader ? (() => { const c = ch.get(String(m.channelId)), n = c.memberIds?.length || com.get(String(c.communityId))?.memberIds?.length || 0; return { audience: n, seen: Math.min((m.readBy ?? []).length, n || Infinity) }; })() : {}),
     }))
     .sort((a, b) => +new Date(b.at) - +new Date(a.at));
 }

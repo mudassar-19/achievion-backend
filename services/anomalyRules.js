@@ -93,3 +93,11 @@ export function reversalPlan({ original, profile, alreadyReversed = false }) {
     gold: Math.max(0, g - gold),
   };
 }
+
+// QA3 G-16: how long an OPEN flag has waited, and the one reminder to the Manager after REMIND_FLAG_DAYS.
+export const REMIND_FLAG_DAYS = 3;
+export const flagAgeDays = (flag, now = new Date()) => (flag.status === "open" ? Math.floor((+now - +new Date(flag.createdAt)) / 86_400_000) : null);
+export const needsFlagReminder = (flag, now = new Date()) => flag.status === "open" && !flag.remindedAt && flagAgeDays(flag, now) >= REMIND_FLAG_DAYS;
+// The two scores of a disagreement, so the Director sees numbers and not only "scores differ".
+export const scoresText = (flag) => (flag.kind === "ai_tl_disagreement" && flag.aiScore != null && flag.tlScore != null
+  ? `AI ${flag.aiScore}, Team Lead ${flag.tlScore} (a gap of ${Math.abs(flag.tlScore - flag.aiScore)} points)` : null);

@@ -5,6 +5,8 @@ import Organization     from "../models/Organization.js";
 import AuditLog         from "../models/AuditLog.js";
 import { createNotification } from "./notificationController.js";
 import mongoose from "mongoose";
+import Milestone from "../models/Milestone.js";
+import { expireAndRemind, resolveNotifications } from "../services/decisionHub.js";
 
 const IS_OID = /^[0-9a-f]{24}$/i;
 const orgFilter = (orgId) => IS_OID.test(orgId) ? { _id: orgId } : { orgId };
@@ -93,23 +95,25 @@ export async function requestExtension(req, res) {
   // Notify Director(s) in this org
   const { default: User } = await import("../models/User.js");
   const directors = await User.find({ orgId, role: "Director", status: { $ne: "deleted" } }, "_id").lean();
+  const [who, proj] = await Promise.all([User.findById(userId, "name").lean(), task.projectId ? Project.findById(task.projectId, "title").lean() : null]); // B-3: name the person and the project
   for (const dir of directors) {
     await createNotification({
       userId: dir._id.toString(),
       orgId,
       type:    "needs_action",
-      title:   "Extension Request",
-      message: `${role} requested +${requestedDays}d extension on "${task.title}".`,
+      title:   "Extension request",
+      message: `${who?.name ?? "A " + role} (${role}) asked for ${requestedDays} more working day${requestedDays === 1 ? "" : "s"} on "${task.title}"${proj ? ` in ${proj.title}` : ""}.`,
       meta:    { extensionRequestId: ext._id, taskId },
     });
   }
 
-  const exceedReason = requestedDays > maxDays ? `exceeds extensionMaxDays (${maxDays})` : `exceeds extensionMaxPct (${maxPct}%)`;
+  // QA3 G-15 / B-27: plain words, working days (the unit the rule uses)
+  const exceedReason = requestedDays > maxDays ? `more than the ${maxDays}-working-day limit` : `more than ${maxPct}% of the plan`;
   await AuditLog.create({
     action: "extension_requested",
     orgId:  new mongoose.Types.ObjectId(String(org._id)),
     performedBy: new mongoose.Types.ObjectId(userId),
-    detail: `Extension queued for Director (+${requestedDays}d, ${exceedReason}) on task "${task.title}"`,
+    detail: `Sent to the Director: ${requestedDays} working day${requestedDays === 1 ? "" : "s"} asked, ${exceedReason}, for task "${task.title}"`,
     scope:  "extension",
   });
 
@@ -122,9 +126,10 @@ export async function listExtensions(req, res) {
   const org = await Organization.findOne(orgFilter(orgId), "_id").lean();
   if (!org) return res.status(404).json({ error: "Org not found." });
 
+  await expireAndRemind(org._id).catch((e) => console.warn("[decision-hub]", e.message)); // C-6
   const { status = "pending", page = 1, limit = 25 } = req.query;
   const filter = { orgId: org._id };
-  if (status === "history") filter.status = { $in: ["approved", "rejected", "counter_proposed"] };
+  if (status === "history") filter.status = { $in: ["approved", "rejected", "counter_proposed", "expired"] };
   else if (status !== "all") filter.status = status;
 
   const [items, total] = await Promise.all([
@@ -133,10 +138,29 @@ export async function listExtensions(req, res) {
       .skip((Number(page) - 1) * Number(limit))
       .limit(Number(limit))
       .populate("requestedBy", "name role")
-      .populate("taskId", "title deadline")
+      .populate({ path: "taskId", select: "title deadline projectId milestoneId assignee createdAt", populate: [{ path: "assignee", select: "name role" }] })
+      .populate("decidedBy", "name role")
       .lean(),
     ExtensionRequest.countDocuments(filter),
   ]);
+
+  // C-7: context for the decision: project, module, who does the task, and how much extension it already had.
+  const taskIds = items.filter((x) => x.taskId?._id).map((x) => x.taskId._id);
+  const [prior, projs, mods] = await Promise.all([
+    taskIds.length ? ExtensionRequest.aggregate([{ $match: { taskId: { $in: taskIds }, status: { $in: ["approved", "auto_applied"] } } }, { $group: { _id: "$taskId", count: { $sum: 1 }, days: { $sum: "$requestedDays" } } }]) : [],
+    Project.find({ _id: { $in: items.map((x) => x.taskId?.projectId ?? x.projectId).filter(Boolean) } }, "title").lean(),
+    Milestone.find({ _id: { $in: items.map((x) => x.taskId?.milestoneId).filter(Boolean) } }, "title").lean(),
+  ]);
+  const priorBy = Object.fromEntries(prior.map((p) => [String(p._id), p])), projBy = Object.fromEntries(projs.map((p) => [String(p._id), p.title])), modBy = Object.fromEntries(mods.map((m) => [String(m._id), m.title]));
+  for (const x of items) {
+    const t = x.taskId, p = t?._id ? priorBy[String(t._id)] : null;
+    const origDays = t?.deadline && t?.createdAt ? Math.max(1, Math.ceil((new Date(t.deadline) - new Date(t.createdAt)) / 86400000)) : null;
+    x.context = {
+      project: projBy[String(t?.projectId ?? x.projectId)] ?? null, module: t?.milestoneId ? modBy[String(t.milestoneId)] ?? null : null,
+      assignee: t?.assignee?.name ?? null, earlierExtensions: p?.count ?? 0, earlierDays: p?.days ?? 0,
+      totalPct: origDays ? Math.round((((p?.days ?? 0) + x.requestedDays) / origDays) * 100) : null, // this request plus earlier ones, as % of the task's original length
+    };
+  }
 
   // Project-level requests (M-2) have no task; give the Director queue a readable title in the same place.
   const projIds = items.filter((x) => !x.taskId && x.projectId).map((x) => x.projectId);
@@ -227,6 +251,9 @@ export async function decideExtension(req, res) {
     before: { status: "pending", ...(deadlineBefore ? { deadline: deadlineBefore } : {}) },
     after:  { status: update.status, ...(deadlineAfter  ? { deadline: deadlineAfter  } : {}) },
   });
+
+  // B-2: the Directors' "needs action" bell items for this request close with the outcome.
+  await resolveNotifications(ext._id, action === "approve" ? "Approved" : action === "reject" ? "Rejected" : "Counter-proposed");
 
   // Notify requester
   await createNotification({

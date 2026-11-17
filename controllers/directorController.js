@@ -14,13 +14,16 @@ import ExtensionRequest   from "../models/ExtensionRequest.js";
 import mongoose           from "mongoose";
 import { VALID_ROLES }    from "../models/User.js";
 import { awardXp, checkAndAwardBadges, DEFAULT_BADGE_THRESHOLDS, adjustUserXp } from "../services/gamificationService.js";
-import { projectHealth }  from "../services/projectHealth.js";
+import { healthForProjects } from "../services/projectHealthService.js";
+import { ACTIVE_STATUSES, activeFilter } from "../services/activeMembers.js";
+import { decisionCounts } from "../services/decisionHub.js";
 import { orgQualityFactor } from "../services/orgQuality.js";
 import { pct, projectProgressByIds } from "../services/moduleProgress.js";
 import { xpZScore, Z_LIMIT } from "../services/anomalyRules.js";
 import XpLog from "../models/XpLog.js";
 import { shouldFlagAdjust } from "../services/xpAdjustRules.js";
 import { xpTotalsByRole } from "../services/xpByRole.js";
+import { cleanDetail, auditSentence, whenText } from "../services/auditText.js";
 
 // Map a role string to its category label (mirrors ROLE_CATEGORY_MAP)
 function roleToCat(role) {
@@ -61,7 +64,7 @@ export async function getDirectorProfile(req, res) {
   const [
     subsApproved, subsRejected, subsPending,
     hrApproved, hrRejected, hrPending,
-    roleChanges, activeProjects, memberCount,
+    roleChanges, activeProjects, totalProjects, memberCount,
     recentLogs,
   ] = await Promise.all([
     Submission.countDocuments({ status: "Approved", submitter: { $in: memberIds } }),
@@ -71,8 +74,9 @@ export async function getDirectorProfile(req, res) {
     Approval.countDocuments({ orgId: org._id, status: "REJECTED" }),
     Approval.countDocuments({ orgId: org._id, status: "PENDING"  }),
     AuditLog.countDocuments({ orgId: org._id, performedBy: directorId, action: "role_change" }),
-    Project.countDocuments({ director: directorId }),
-    User.countDocuments({ orgId: org._id.toString(), status: { $ne: "deleted" }, role: { $ne: "Director" } }),
+    Project.countDocuments({ director: directorId, status: "Active" }), // C-9: same meaning as the dashboard
+    Project.countDocuments({ director: directorId, status: { $nin: ["Deleted"] }, isDeleted: { $ne: true } }),
+    User.countDocuments(activeFilter([org._id.toString()], { employeesOnly: true })), // C-10: active employees only
     AuditLog.find({ $or: [{ orgId: org._id }, { performedBy: org.orgId }] })
       .sort({ createdAt: -1 })
       .limit(6)
@@ -104,6 +108,7 @@ export async function getDirectorProfile(req, res) {
       hrPending,
       roleChanges,
       activeProjects,
+      totalProjects,
       memberCount,
     },
     recentLogs: recentLogs.map((l) => ({
@@ -120,6 +125,12 @@ export async function getDirectorProfile(req, res) {
   });
 }
 
+// ── GET /api/director/decisions ── C-5: the one count behind the sidebar badge, the dashboard card and the bell
+export async function getDecisions(req, res) {
+  const org = await Organization.findOne(orgFilter(req.user.orgId), "_id").lean();
+  res.json(org ? await decisionCounts(org._id) : { approvals: 0, extensions: 0, total: 0 });
+}
+
 // ── GET /api/director/dashboard ───────────────────────────────────────────────
 export async function getDashboard(req, res) {
   const { orgId, id: directorUserId } = req.user;
@@ -130,10 +141,10 @@ export async function getDashboard(req, res) {
   const [activeProjects, pendingCount, burnoutProfiles, avgAiScore] =
     await Promise.all([
       Project.countDocuments({ director: directorUserId, status: "Active" }),
-      Approval.countDocuments({ orgId: orgObjectId, status: "PENDING" }),
+      decisionCounts(orgObjectId), // C-5: account approvals + extension requests, one count
       GamificationProfile.find({ orgId, hp: { $lt: 40 } })
-        .populate("userId", "name role")
-        .lean(),
+        .populate("userId", "name role status")
+        .lean().then((l) => l.filter((p) => p.userId && ACTIVE_STATUSES.includes(p.userId.status))),
       org ? orgQualityFactor(String(org._id)).then((q) => q.score) : null,
     ]);
 
@@ -141,7 +152,8 @@ export async function getDashboard(req, res) {
     // F-071: the screen reads this key (the name is old; it is the org's review-star quality 0-100, same as Org Health).
     avgAiScore,
     activeProjects,
-    pendingApprovals: pendingCount,
+    pendingApprovals: pendingCount.total,
+    decisions:        pendingCount,
     burnoutRisk:      burnoutProfiles.length,
     burnoutUsers: burnoutProfiles.map((p) => ({
       id:   p.userId?._id,
@@ -235,7 +247,7 @@ export async function getAnalytics(req, res) {
 
   const [topEarnersRaw, deptAgg, taskAgg, profileAgg] = await Promise.all([
     GamificationProfile.find({ orgId })
-      .sort({ currentXp: -1 })
+      .sort({ totalXp: -1 })
       .limit(12)
       .populate("userId", "name role")
       .lean(),
@@ -255,7 +267,7 @@ export async function getAnalytics(req, res) {
         $group: {
           _id:     "$department",
           members: { $sum: 1 },
-          avgXp:   { $avg: { $ifNull: ["$profile.currentXp", 0] } },
+          avgXp:   { $avg: { $ifNull: ["$profile.totalXp", 0] } },
         },
       },
       { $sort: { avgXp: -1 } },
@@ -274,7 +286,7 @@ export async function getAnalytics(req, res) {
 
     GamificationProfile.aggregate([
       { $match: { orgId } },
-      { $group: { _id: null, avgXp: { $avg: "$currentXp" }, atRisk: { $sum: { $cond: [{ $lt: ["$hp", 30] }, 1, 0] } } } },
+      { $group: { _id: null, avgXp: { $avg: "$totalXp" }, atRisk: { $sum: { $cond: [{ $lt: ["$hp", 30] }, 1, 0] } } } },
     ]),
   ]);
 
@@ -302,7 +314,7 @@ export async function getAnalytics(req, res) {
         rank:  i + 1,
         name:  p.userId?.name,
         role:  p.userId?.role,
-        xp:    p.currentXp,
+        xp:    p.totalXp,
         level: p.level,
       })),
   });
@@ -337,7 +349,7 @@ export async function getTeam(req, res) {
   const dirIds = directorIds.map((d) => d._id);
 
   const [profiles, taskCountAgg, orgProjects] = await Promise.all([
-    GamificationProfile.find({ userId: { $in: memberIds } }, "userId level currentXp hp").lean(),
+    GamificationProfile.find({ userId: { $in: memberIds } }, "userId level totalXp hp").lean(),
     Task.aggregate([
       { $match: { assignees: { $in: memberIds }, status: "Done" } },
       { $group: { _id: { $arrayElemAt: ["$assignees", 0] }, count: { $sum: 1 } } },
@@ -374,7 +386,7 @@ export async function getTeam(req, res) {
       department: m.department,
       status:     m.status,
       level:      profileMap[m._id.toString()]?.level     ?? 1,
-      xp:         profileMap[m._id.toString()]?.currentXp ?? 0,
+      xp:         profileMap[m._id.toString()]?.totalXp ?? 0,
       hp:         profileMap[m._id.toString()]?.hp        ?? 100,
       tasksDone:  taskMap[m._id.toString()] ?? 0,
       projects:   memberProjectsMap.get(m._id.toString()) ?? [],
@@ -442,45 +454,22 @@ export async function getGarden(req, res) {
 
   const projects = await Project.find(
     { director: { $in: dirIds }, status: { $ne: "Deleted" } },
-    "title status startDate deadline"
-  ).lean();
+    "title status startDate deadline completedAt archivedAt updatedAt createdAt managerId"
+  ).populate("managerId", "name").lean();
 
   if (projects.length === 0) {
     return res.json({ projects: [], onTrackCount: 0, totalCount: 0, onTrackPct: 0 });
   }
 
-  const projectIds = projects.map((p) => p._id);
-  const taskStats  = await Task.aggregate([
-    { $match: { projectId: { $in: projectIds } } },
-    { $group: {
-      _id:          "$projectId",
-      totalTasks:   { $sum: 1 },
-      doneTasks:    { $sum: { $cond: [{ $eq: ["$status", "Done"] }, 1, 0] } },
-      openTasks:    { $sum: { $cond: [{ $ne: ["$status", "Done"] }, 1, 0] } },
-      overdueTasks: { $sum: { $cond: [
-        { $and: [{ $ne: ["$status", "Done"] }, { $lt: ["$deadline", new Date()] }] },
-        1, 0,
-      ]}},
-    }},
-  ]);
-
-  const statsMap = Object.fromEntries(taskStats.map((s) => [s._id.toString(), s]));
-
+  // C-4/C-1: one health value and one completion % per project, from the shared health function (Completed is frozen, never red).
+  const health = await healthForProjects(projects);
   const result = projects.map((p) => {
-    const s           = statsMap[p._id.toString()] ?? { totalTasks: 0, doneTasks: 0, openTasks: 0, overdueTasks: 0 };
-    const progressPct = pct(s.doneTasks, s.totalTasks); // QA2-64: the one project progress formula
-    const { score, band } = projectHealth({
-      startDate:    p.startDate,
-      deadline:     p.deadline,
-      progressPct,
-      openTasks:    s.openTasks,
-      overdueTasks: s.overdueTasks,
-      totalTasks:   s.totalTasks,
-    });
-    return { id: p._id, title: p.title, status: p.status, healthScore: score, healthBand: band, progressPct };
+    const h = health.get(String(p._id));
+    return { id: p._id, title: p.title, status: p.status, healthScore: h.score, healthBand: h.band, healthNote: h.note ?? null, progressPct: h.progressPct, deadline: p.deadline ?? null, manager: p.managerId?.name ?? null }; // C-21: the hover card
   });
 
-  const onTrackCount = result.filter((p) => p.healthBand === "On track").length;
+  // "On track" = health band On track, or finished on time. Completed late, At risk, Off track and Not started are not counted.
+  const onTrackCount = result.filter((p) => p.healthBand === "On track" || (p.healthBand === "Completed" && p.healthNote === "Completed on time")).length;
   const onTrackPct   = result.length > 0 ? Math.round((onTrackCount / result.length) * 100) : 0;
   res.json({ projects: result, onTrackCount, totalCount: result.length, onTrackPct });
 }
@@ -574,7 +563,7 @@ export async function getAuditLog(req, res) {
   const category = req.query.category         || null;
   const search   = req.query.search?.trim()   || null;
 
-  const org = await Organization.findOne(orgFilter(orgId), "_id orgId").lean();
+  const org = await Organization.findOne(orgFilter(orgId), "_id orgId workingTime.timezone").lean();
   if (!org) return res.status(404).json({ error: "Organization not found." });
 
   const query = {
@@ -629,8 +618,11 @@ export async function getAuditLog(req, res) {
     oldRole:       l.oldRole    ?? null,
     newRole:       l.newRole    ?? null,
     newStatus:     l.newStatus  ?? null,
-    detail:        l.detail     ?? null,
+    detail:        cleanDetail(l.detail) ?? null, // QA3 G-15: no config keys, working days
     createdAt:     l.createdAt,
+    when:          whenText(l.createdAt, org.workingTime?.timezone), // one time format everywhere
+    sentence:      auditSentence({ action: l.action, performerName: typeof l.performedBy === "object" ? l.performedBy?.name : null, targetName: l.targetUserId?.name,
+                     projectTitle: l.projectTitle ?? l.targetProjectId?.title, oldRole: l.oldRole, newRole: l.newRole, detail: l.detail }),
     // Slice 3a fields (D-022a)
     performerName: typeof l.performedBy === "object" ? l.performedBy?.name ?? null : null,
     performerRole: typeof l.performedBy === "object" ? l.performedBy?.role ?? null : null,
@@ -647,15 +639,15 @@ export async function getAuditLog(req, res) {
 export async function getXpDistribution(req, res) {
   const { orgId } = req.user;
 
-  const profiles = await GamificationProfile.find({ orgId })
-    .populate("userId", "role")
-    .lean();
+  const profiles = (await GamificationProfile.find({ orgId })
+    .populate("userId", "role status")
+    .lean()).filter((p) => p.userId && ACTIVE_STATUSES.includes(p.userId.status)); // C-10: removed people are not counted
 
   const groups = {};
   for (const p of profiles) {
     const cat = roleToCat(p.userId?.role);
     if (!groups[cat]) groups[cat] = { category: cat, totalXp: 0, memberCount: 0 };
-    groups[cat].totalXp    += p.currentXp ?? 0;
+    groups[cat].totalXp    += p.totalXp ?? 0;
     groups[cat].memberCount += 1;
   }
 
@@ -973,7 +965,7 @@ export async function getXpByRole(req, res) {
   // Aggregate currentXp grouped by user, then group by role
   const profiles = await GamificationProfile.find(
     { userId: { $in: memberIds } },
-    "userId currentXp"
+    "userId totalXp"
   ).lean();
 
   res.json({ data: xpTotalsByRole(members, profiles) }); // QA2-23: 0-XP roles included
@@ -1016,9 +1008,11 @@ export async function getSprintVelocity(req, res) {
         id:          String(s._id),
         name:        s.name,
         startDate:   s.startDate,
+        endDate:     s.endDate ?? null, // QA3 G-13: the sprint's date range
         status:      s.status,
         planned,
         completed,
+        enough:      planned >= 3,      // QA3 G-13: fewer than 3 planned tasks is "Not enough data", not a percentage
         pct:         planned > 0 ? Math.round((completed / planned) * 100) : 0,
       };
     })

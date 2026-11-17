@@ -1,8 +1,8 @@
 import Recap        from "../models/Recap.js";
 import Organization from "../models/Organization.js";
 import mongoose     from "mongoose";
-import { periodFor, recapCards, aiRecapSummary } from "../services/recapService.js";
-import { periodRange } from "../services/recapMetrics.js";
+import { recapCards, aiRecapSummary } from "../services/recapService.js";
+import { periodRange, completedPeriodFor } from "../services/recapMetrics.js";
 
 const IS_OID   = /^[0-9a-f]{24}$/i;
 const orgFilter = (orgId) => IS_OID.test(orgId) ? { _id: orgId } : { orgId };
@@ -26,6 +26,9 @@ export async function listRecaps(req, res) {
 export async function pendingRecaps(req, res) {
   const { orgId, id: userId } = req.user;
   const oid = new mongoose.Types.ObjectId(userId);
+  // QA3 B-29: the Settings switch "Weekly recap" off means no recap pop-up on sign-in.
+  const org = await Organization.findOne(orgFilter(orgId), "gamificationSettings.recapEnabled").lean();
+  if (org?.gamificationSettings?.recapEnabled === false) return res.json({ items: [] });
   const items = await Recap.find({
     orgId,
     "seenBy.userId": { $ne: oid },
@@ -60,7 +63,7 @@ export async function generateRecap(req, res) {
   const org = await Organization.findOne(orgFilter(orgId), "_id orgId").lean();
   if (!org) return res.status(404).json({ error: "Org not found." });
 
-  const period = periodFor(type);
+  const period = completedPeriodFor(type); // QA3 G-17: only a period that has ended; never the running week
   const range = periodRange(period.start, period.end);
   const periodLabel = type === "weekly"
     ? `Week of ${new Date(period.start).toLocaleDateString("en-GB", { day: "numeric", month: "short", timeZone: "UTC" })}`
@@ -74,9 +77,9 @@ export async function generateRecap(req, res) {
     else aiNote = r.error === "not_configured" ? "AI is not configured, so there is no AI summary." : r.error === "cap" ? "The daily AI limit is reached, so there is no AI summary." : "The AI is busy right now, so there is no AI summary. Press Generate again to retry.";
   }
 
-  const recap = await Recap.create({
-    orgId, type, periodLabel, periodRange: range, periodStart: period.start, periodEnd: period.end, cards, aiSummary,
-    seenBy: [{ userId: new mongoose.Types.ObjectId(userId), seenAt: new Date() }],
-  });
+  // QA3 G-17: one period = one recap. Asking again refreshes the same recap instead of adding a second "Week 44".
+  const seen = { userId: new mongoose.Types.ObjectId(userId), seenAt: new Date() };
+  const recap = await Recap.findOneAndUpdate({ orgId, type, periodStart: period.start },
+    { $set: { periodLabel, periodRange: range, periodEnd: period.end, cards, aiSummary }, $setOnInsert: { seenBy: [seen] } }, { upsert: true, new: true });
   res.status(201).json({ recap, aiNote });
 }

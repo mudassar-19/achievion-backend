@@ -1,4 +1,6 @@
 import ChatCommunity from "../models/ChatCommunity.js";
+import Project from "../models/Project.js";
+import { DEFAULT_GROUPS, defaultMembers, isProjectCommunity, canDeactivateCommunity } from "../services/chatDefaults.js";
 import { coworkerFields } from "../services/accessRules.js";
 import { firstLengthError } from "../services/textLimits.js";
 import ChatChannel   from "../models/ChatChannel.js";
@@ -6,7 +8,7 @@ import User          from "../models/User.js";
 import Notification  from "../models/Notification.js";
 import mongoose      from "mongoose";
 import * as R        from "../services/chatRules.js";
-import { orgLeaderIds, orgUserIds, chatAudit, addToCommunity, removeFromCommunity, roleOf, unreadCounts } from "../services/chatService.js";
+import { orgLeaderIds, orgUserIds, chatAudit, addToCommunity, removeFromCommunity, roleOf, unreadCounts, lastMessages } from "../services/chatService.js";
 
 // Rules: ACHIEVION_BUILD_PLAN_V2.md "COMMUNITIES: RULES", enforced via services/chatRules.js (D-074).
 const { ObjectId } = mongoose.Types;
@@ -46,11 +48,13 @@ export async function getCommunities(req, res) {
     communityId: { $in: communities.map((c) => c._id) }, type: { $ne: "dm" }, isArchived: { $ne: true },
   }).sort({ isDefault: -1, name: 1 }).lean();
 
-  const unread = await unreadCounts(groups.filter((g) => R.canView(g, user)), userId);
+  const viewable = groups.filter((g) => R.canView(g, user));
+  const unread = await unreadCounts(viewable, userId);
+  const last = await lastMessages(viewable);
   const result = communities.map((c) => {
     const mine = [], joinable = [];
     for (const g of groups.filter((x) => String(x.communityId) === String(c._id))) {
-      if (R.canView(g, user)) mine.push({ ...g, unread: unread[String(g._id)] ?? 0, muted: (g.mutedBy ?? []).some((m) => String(m) === userId) });
+      if (R.canView(g, user)) mine.push({ ...g, unread: unread[String(g._id)] ?? 0, lastMessage: last[String(g._id)] ?? null, muted: (g.mutedBy ?? []).some((m) => String(m) === userId) });
       else joinable.push({ _id: g._id, name: g.name, icon: g.icon, description: g.description, joinApproval: !!g.joinApproval,
         requested: (g.joinRequests ?? []).some((m) => String(m) === userId) });
     }
@@ -68,12 +72,15 @@ export async function getCommunities(req, res) {
   res.json(result);
 }
 
+// Community tile colours (E-C 7, D-QA3B-8): names of the palette the client draws; anything else is ignored.
+const COLORS = ["indigo", "teal", "amber", "rose", "violet", "sky", "emerald", "slate"];
+
 // ── POST /api/communities — Director / Manager ────────────────────────────────
 export async function createCommunity(req, res) {
   const { id: userId, orgId, role } = req.user;
   if (!R.canCreateCommunity(role)) return res.status(403).json({ error: "Only Directors and Managers can create communities." });
 
-  const { name, description = "", icon = "💬", type = "custom", memberIds = [], projectId, department, teamId, initialGroups = [] } = req.body;
+  const { name, description = "", icon = "chat", color, type = "custom", memberIds = [], projectId, department, teamId, initialGroups = [] } = req.body;
   if (!name?.trim()) return res.status(400).json({ error: "Community name is required." });
   const tooLong = firstLengthError([["Community name", name, "group"], ["Description", description, "description"]]);
   if (tooLong) return res.status(400).json({ error: tooLong });
@@ -84,7 +91,7 @@ export async function createCommunity(req, res) {
   let community;
   try {
     community = await ChatCommunity.create({
-      orgId: toOid(orgId), name: name.trim(), description: String(description).trim(), icon,
+      orgId: toOid(orgId), name: name.trim(), description: String(description).trim(), icon, color: COLORS.includes(color) ? color : null,
       type: ["organization", "project", "department", "team", "custom"].includes(type) ? type : "custom",
       projectId: mongoose.isValidObjectId(projectId) ? toOid(projectId) : null,
       department: department ?? null, teamId: mongoose.isValidObjectId(teamId) ? toOid(teamId) : null,
@@ -103,6 +110,15 @@ export async function createCommunity(req, res) {
   });
 
   const createdGroups = [announcements.toObject()];
+  // D-QA3B-5: General (everyone in the community) and Leadership (Director + Managers) are default too; #random and departments are not.
+  for (const def of DEFAULT_GROUPS.filter((d) => d.name !== "announcements")) {
+    const group = await ChatChannel.create({
+      orgId: toOid(orgId), communityId: community._id, name: def.name, description: def.description, icon: def.icon, type: def.type,
+      memberIds: defaultMembers(def, { memberIds: members, leaderIds: leaders }).map(toOid), adminIds: leaders.map(toOid), createdBy: toOid(userId), isDefault: true,
+      permissions: { sendMessages: def.send, editInfo: "admins", addMembers: "admins" },
+    });
+    createdGroups.push(group.toObject());
+  }
   for (const g of initialGroups) {
     if (!g?.name?.trim()) continue;
     const gMembers = g.memberIds?.length ? R.withLeaders([userId, ...(await orgUserIds(orgId, g.memberIds))], leaders) : members;
@@ -138,10 +154,13 @@ export async function updateCommunity(req, res) {
   if (!R.isCommunityAdmin(me(req))) return res.status(403).json({ error: "Only the Director or a Manager can edit community info." });
 
   const before = { name: community.name, description: community.description, icon: community.icon };
-  const { name, description, icon } = req.body;
+  const { name, description, icon, color } = req.body;
+  // E-8: a project community keeps the project's title, so its name cannot be edited here.
+  if (name?.trim() && name.trim() !== community.name && isProjectCommunity(community)) return res.status(409).json({ error: "A project community is named after its project. Rename the project instead." });
   if (name?.trim()) community.name = name.trim();
   if (description !== undefined) community.description = String(description).trim();
   if (icon) community.icon = icon;
+  if (COLORS.includes(color)) community.color = color;
   try { await community.save(); } catch (err) {
     if (err.code === 11000) return res.status(409).json({ error: "A community with this name already exists." });
     throw err;
@@ -155,7 +174,12 @@ export async function archiveCommunity(req, res) {
   const community = await loadCommunity(req, res);
   if (!community) return;
   if (!R.canArchiveCommunity(req.user.role)) return res.status(403).json({ error: "Only the Director can deactivate a community." });
-  community.isArchived = req.body?.archived !== false;
+  const archive = req.body?.archived !== false;
+  if (archive && isProjectCommunity(community)) { // E-8: not while the project is still running
+    const project = await Project.findById(community.projectId, "status").lean();
+    if (!canDeactivateCommunity(community, project?.status ?? "Deleted")) return res.status(409).json({ error: "This project is still running. A project community can be deactivated once the project is completed or archived." });
+  }
+  community.isArchived = archive;
   await community.save();
   chatAudit(req, community.isArchived ? "community_archived" : "community_restored",
     `${community.isArchived ? "Deactivated" : "Restored"} community "${community.name}"`);

@@ -2,6 +2,8 @@ import Project   from "../models/Project.js";
 import { firstLengthError } from "../services/textLimits.js";
 import Milestone from "../models/Milestone.js";
 import Task      from "../models/Task.js";
+import Risk      from "../models/Risk.js";
+import { completionBlockers } from "../services/completionRules.js";
 import AuditLog  from "../models/AuditLog.js";
 import Organization from "../models/Organization.js";
 import { healthForProjects } from "../services/projectHealthService.js";
@@ -85,6 +87,35 @@ export async function getProjectById(req, res) {
 
 // PATCH /api/manager/projects/:id (edit) lives in managerProjectsController.editProject (M-2: deadline via extension only).
 
+async function projectCompletionBlockers(projectId, orgObjectId) {
+  const [openTasks, openRisks] = await Promise.all([
+    Task.countDocuments({ projectId, status: { $ne: "Done" } }), // Cancelled is hidden by the Task model
+    Risk.countDocuments({ projectId, orgId: orgObjectId, status: { $in: ["open", "escalated"] } }),
+  ]);
+  return completionBlockers({ openTasks, openRisks });
+}
+
+// ── POST /api/manager/projects/:id/close  { reason } (C-1: Close with open tasks) ──
+export async function closeProjectWithOpenTasks(req, res) {
+  const { orgId, id: userId } = req.user;
+  const reason = String(req.body?.reason ?? "").trim();
+  if (reason.length < 5) return res.status(400).json({ error: "Give a reason (at least 5 characters)." });
+  if (reason.length > 500) return res.status(400).json({ error: "The reason can be at most 500 characters." });
+  const resolved = await resolveOrgQuery(orgId);
+  if (!resolved) return res.status(404).json({ error: "Organization not found." });
+  const { org, filter } = resolved;
+  const cur = await Project.findOne({ _id: req.params.id, ...filter }, "_id title status").lean();
+  if (!cur) return res.status(404).json({ error: "Project not found." });
+  if (["Completed", "Archived"].includes(cur.status)) return res.status(409).json({ error: `This project is already ${cur.status}.` });
+  const now = new Date();
+  const cancelled = await Task.updateMany({ projectId: cur._id, status: { $nin: ["Done", "Cancelled"] } }, { $set: { status: "Cancelled", cancelReason: reason, cancelledAt: now } }, { withCancelled: true });
+  const risks = await Risk.updateMany({ projectId: cur._id, orgId: org._id, status: { $in: ["open", "escalated", "mitigated"] } }, { $set: { status: "closed", closedAt: now } });
+  const project = await Project.findByIdAndUpdate(cur._id, { $set: { status: "Completed", completedAt: now }, $push: { statusHistory: { status: "Completed", changedAt: now, changedBy: userId, note: `Closed with open tasks: ${reason}` } } }, { returnDocument: "after" }).lean();
+  AuditLog.create({ action: "project_status_changed", orgId: org._id, performedBy: userId, targetProjectId: cur._id, projectTitle: cur.title,
+    detail: `Project completed with ${cancelled.modifiedCount} open task(s) cancelled and ${risks.modifiedCount} risk(s) closed. Reason: ${reason}` }).catch(() => {});
+  return res.json({ success: true, status: project.status, cancelledTasks: cancelled.modifiedCount, closedRisks: risks.modifiedCount });
+}
+
 // ── PATCH /api/manager/projects/:id/status ────────────────────────────────────
 export async function updateProjectStatus(req, res) {
   const { orgId, id: userId } = req.user;
@@ -107,12 +138,20 @@ export async function updateProjectStatus(req, res) {
     }
   }
 
+  // C-1: Completed only when every task is Done/Cancelled and no risk is open (else "Close with open tasks").
+  if (status === "Completed") {
+    const cur = await Project.findOne({ _id: req.params.id, ...filter }, "_id").lean();
+    if (!cur) return res.status(404).json({ error: "Project not found." });
+    const blockers = await projectCompletionBlockers(cur._id, org._id);
+    if (blockers.length) return res.status(409).json({ error: `This project cannot be completed yet. ${blockers.join(" ")}`, code: "open_work", blockers });
+  }
+
   const historyEntry = { status, changedAt: new Date(), changedBy: userId, note };
 
   const project = await Project.findOneAndUpdate(
     { _id: req.params.id, ...filter },
     {
-      $set:  { status, ...(status === "Archived" ? { archivedAt: new Date() } : {}) },
+      $set:  { status, ...(status === "Archived" ? { archivedAt: new Date() } : {}), ...(status === "Completed" ? { completedAt: new Date() } : {}) },
       $push: { statusHistory: historyEntry },
     },
     { returnDocument: "after" }
@@ -191,7 +230,11 @@ export async function updateMilestone(req, res) {
     if (req.body[key] !== undefined) updates[key] = req.body[key];
   }
 
-  if (req.body.status === "Completed") updates.completedAt = new Date();
+  if (req.body.status === "Completed") {
+    updates.completedAt = new Date();
+    const blockers = completionBlockers({ openTasks: await Task.countDocuments({ milestoneId, status: { $ne: "Done" } }) }); // C-1
+    if (blockers.length) return res.status(409).json({ error: `This module cannot be finished yet. ${blockers.join(" ")}`, code: "open_work", blockers });
+  }
 
   if (Object.keys(updates).length === 0)
     return res.status(400).json({ error: "No valid fields provided." });

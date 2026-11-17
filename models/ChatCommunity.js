@@ -5,7 +5,8 @@ const chatCommunitySchema = new Schema(
     orgId:       { type: Types.ObjectId, ref: "Organization", required: true, index: true },
     name:        { type: String, required: true, trim: true },
     description: { type: String, default: "" },
-    icon:        { type: String, default: "💬" }, // emoji icon
+    icon:        { type: String, default: "💬" }, // a line-icon name ("chat", "rocket"...); old rows may still hold an emoji, the client shows a letter then
+    color:       { type: String, default: null }, // tile colour name; null = derived from the name
     type: {
       type:    String,
       enum:    ["organization", "project", "department", "team", "custom"],

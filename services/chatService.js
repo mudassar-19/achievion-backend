@@ -58,3 +58,18 @@ export async function unreadCounts(channels, userId) {
   ]);
   return Object.fromEntries(rows.map((r) => [String(r._id), r.n]));
 }
+
+// Last message of many channels in ONE aggregate, for the chat list preview (E-C 7, D-QA3B-8): { channelId: { text, at, from } }.
+// Respects "clear conversation"; an attachment-only message shows as "Attachment".
+export async function lastMessages(channels) {
+  if (!channels.length) return {};
+  const rows = await ChatMessage.aggregate([
+    { $match: { channelId: { $in: channels.map((c) => c._id) }, deletedAt: null } },
+    { $sort: { createdAt: -1 } },
+    { $group: { _id: "$channelId", content: { $first: "$content" }, at: { $first: "$createdAt" }, sender: { $first: "$sender" }, files: { $first: { $size: { $ifNull: ["$attachments", []] } } } } },
+  ]);
+  const names = new Map((await User.find({ _id: { $in: rows.map((r) => r.sender) } }, "name").lean()).map((u) => [String(u._id), u.name]));
+  return Object.fromEntries(rows.map((r) => [String(r._id), {
+    text: (r.content || (r.files ? "Attachment" : "")).slice(0, 80), at: r.at, from: String(names.get(String(r.sender)) ?? "").split(" ")[0] || null,
+  }]));
+}
