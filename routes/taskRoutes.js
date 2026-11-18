@@ -17,6 +17,9 @@ const notManager = (req, res, next) => (req.user?.role === "Manager"
   ? res.status(403).json({ error: "Managers can view tasks but not change them. The Team Lead does that." })
   : next());
 
+// SEC M-4: the Director reads tasks; the Manager and Team Lead change them (D-075). No write path for the Director here.
+const notDirector = (req, res, next) => (req.user?.role === "Director" ? res.status(403).json({ error: "The Director can view tasks but not change them." }) : next());
+
 // T-2 (D-125): a Team Lead may touch only tasks / projects of their own projects here too (same guards as
 // /api/teamlead, T-1 D-117). Before, these routes checked only the org. Other roles are unchanged.
 const asTL = (guard) => (req, res, next) => (req.user?.role === "Team Lead" ? guard(req, res, next) : next());
@@ -36,8 +39,8 @@ router.get("/",                  taskCtrl.getTasks);
 
 // ── Single task ───────────────────────────────────────────────────────────────
 router.get("/:id",                           taskCtrl.getTask);
-router.patch("/:id",            mgmt, notManager,        taskCtrl.updateTask);
-router.patch("/:id/status", notManager,                  taskCtrl.updateTaskStatus);
+router.patch("/:id",            mgmt, notManager, notDirector, taskCtrl.updateTask);
+router.patch("/:id/status", notManager, notDirector,        taskCtrl.updateTaskStatus);
 
 // ── Submission & review ───────────────────────────────────────────────────────
 router.post("/:id/submit",  needStorage, upload.array("files", 5), taskCtrl.submitTask);
@@ -60,6 +63,6 @@ router.post("/:id/comments/:commentId/reactions", taskCtrl.reactComment);
 // T-4 (D-137): Tester QA sign-off (UI comes with the Tester portal).
 router.post("/:id/qa-signoff", requireRole("Tester", "Senior Tester", "Junior Tester"), signOff); // E-4 (D-189): same handler as /api/quality/qa/:id/signoff
 router.post("/:id/time-log",           taskCtrl.logTime);
-router.delete("/:id",       mgmt, notManager, asTL(deletableTask), taskCtrl.deleteTask);
+router.delete("/:id",       mgmt, notManager, notDirector, asTL(deletableTask), taskCtrl.deleteTask);
 
 export default router;

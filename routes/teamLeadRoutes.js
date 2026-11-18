@@ -3,7 +3,7 @@ import * as fl from "../controllers/flowsController.js";
 import { Router } from "express";
 import { aiConfigured } from "../services/aiChain.js";
 import * as tai from "../controllers/teamLeadAiController.js";
-import { listChats, getChat, feedback as aiFeedback } from "../controllers/managerAiController.js";
+import { listChats, getChat, deleteChat, deleteAllChats, feedback as aiFeedback } from "../controllers/managerAiController.js";
 import * as tp from "../controllers/teamLeadPerformanceController.js";
 import * as tr from "../controllers/teamLeadReviewController.js";
 import { verifyToken, requireRole } from "../middleware/authMiddleware.js";
@@ -191,6 +191,8 @@ router.get("/ai/status",                (_req, res) => res.json({ configured: ai
 router.get("/ai/context",               tai.getContext);
 router.get("/ai/chats",                 listChats);
 router.get("/ai/chats/:id",             getChat);
+router.delete("/ai/chats/:id",          deleteChat);   // QA4 M-14
+router.delete("/ai/chats",              deleteAllChats);
 router.post("/ai/chat",                 tai.chat);
 router.post("/ai/feedback",             aiFeedback);
 router.get("/ai/insight",               tai.getInsight);

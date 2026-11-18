@@ -5,9 +5,16 @@ import User from "../models/User.js";
 import mongoose from "mongoose";
 
 const esc = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// The old name becomes the new one exactly once: where the old name is already part of the new name ("Hira" -> "Hira Malik", "Hira Malik" -> "Hira Malik Khan"),
+// text that already reads as the new name is left alone (no "Hira Malik Malik").
+export function nameRegex(oldName, newName) {
+  const at = String(newName).indexOf(oldName), pre = at > 0 ? newName.slice(0, at) : "", post = at >= 0 ? newName.slice(at + oldName.length) : "";
+  const before = pre ? `(?<!${esc(pre)})` : "", after = post ? `(?!${esc(post)})` : "";
+  return new RegExp(`(?<![\\p{L}\\p{N}])${before}${esc(oldName)}${after}(?![\\p{L}\\p{N}])`, "gu");
+}
 export function replaceName(text, oldName, newName) {
   if (!oldName || !text || oldName === newName) return text;
-  return String(text).replace(new RegExp(`(?<![\\p{L}\\p{N}])${esc(oldName)}(?![\\p{L}\\p{N}])`, "gu"), newName);
+  return String(text).replace(nameRegex(oldName, newName), newName);
 }
 
 // Rewrites the person's old name inside this organization's bell text. The audit log is append-only (tamper-evident), so it is NOT rewritten:

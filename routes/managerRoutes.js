@@ -60,6 +60,7 @@ import { listBookings, createBooking, cancelBooking } from "../controllers/asset
 import * as mm from "../controllers/managerMotivationController.js";
 import * as rp from "../controllers/managerReportsController.js";
 import * as ai from "../controllers/managerAiController.js";
+import { decideExtension, listManagerPendingExtensions } from "../controllers/extensionController.js";
 
 const router = Router();
 
@@ -101,6 +102,9 @@ router.get("/projects/:id/modules",                 mgr, mp.getModules);
 router.patch("/projects/:id/modules/:moduleId/lead", mgr, mp.assignModuleLead);
 router.get("/projects/:id/sprints",                 mgr, mp.getProjectSprints);
 router.post("/projects/:id/extension",              mgr, mp.requestProjectExtension);
+// QA4 D-QA4-12: the Manager decides extension requests up to the limit (3 working days by default) on their own projects
+router.post("/extensions/:id/decide",               mgr, decideExtension);
+router.get("/extensions/pending",                   mgr, listManagerPendingExtensions);
 router.get("/tasks/:id/detail",                     mgr, mp.getTaskDetail);
 // M-4 Resources (Manager only)
 router.get("/resources/workload",                   mgr, mr.getWorkload);
@@ -153,6 +157,10 @@ router.get("/reports/export",                       mgr, rp.exportReport);
 router.get("/ai/context",                           mgr, ai.getContext);
 router.get("/ai/chats",                             mgr, ai.listChats);
 router.get("/ai/chats/:id",                         mgr, ai.getChat);
+router.delete("/ai/chats/:id",                      mgr, ai.deleteChat);      // QA4 M-14
+router.delete("/ai/chats",                          mgr, ai.deleteAllChats);
+router.get("/ai/insights/unseen",                   mgr, ai.unseenInsights);  // QA4 M-13
+router.post("/ai/insights/seen",                    mgr, ai.markInsightsSeen);
 router.post("/ai/chat",                             mgr, ai.chat);
 router.post("/ai/feedback",                         mgr, ai.feedback);
 router.get("/ai/insight",                           mgr, ai.getInsight);
@@ -164,15 +172,16 @@ router.post("/ai/reports/lessons",                  mgr, ai.lessonsDraft);
 router.post("/ai/challenge-draft",                  mgr, ai.challengeDraft);
 router.post("/ai/tasks/:id/rebalance",              mgr, ai.rebalanceHint);
 router.post("/ai/anomalies/:flagId/explain",        mgr, ai.explainAnomaly);
-router.patch("/projects/:id/status",               updateProjectStatus);
-router.post("/projects/:id/close",                  closeProjectWithOpenTasks);
+// SEC P-2: project and module WRITES are the Manager's only (a Team Lead used to pass the router-wide Manager/Team Lead gate)
+router.patch("/projects/:id/status",               mgr, updateProjectStatus);
+router.post("/projects/:id/close",                  mgr, closeProjectWithOpenTasks);
 router.get("/projects/:id/tasks",                   getProjectTasks);
 router.get("/projects/:id/milestones",               getMilestones);
-router.post("/projects/:id/milestones",              createMilestone);
-router.patch("/projects/:id/milestones/:milestoneId", updateMilestone);
-router.delete("/projects/:id/milestones/:milestoneId", deleteMilestone);
-router.post("/projects/:id/freeze",                  freezeProject);
-router.delete("/projects/:id",                       deleteProject);
+router.post("/projects/:id/milestones",              mgr, createMilestone);
+router.patch("/projects/:id/milestones/:milestoneId", mgr, updateMilestone);
+router.delete("/projects/:id/milestones/:milestoneId", mgr, deleteMilestone);
+router.post("/projects/:id/freeze",                  mgr, freezeProject);
+router.delete("/projects/:id",                       mgr, deleteProject);
 router.get("/team-full",                            getTeamFull);
 router.get("/timeline",                             getTimeline);
 router.get("/team-availability",                    getTeamAvailability);

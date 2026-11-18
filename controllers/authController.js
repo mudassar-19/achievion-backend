@@ -8,6 +8,7 @@ import jwt    from "jsonwebtoken";
 import User, { ROLE_CATEGORY_MAP, VALID_ROLES } from "../models/User.js";
 import Organization       from "../models/Organization.js";
 import GamificationProfile from "../models/GamificationProfile.js";
+import mongoose            from "mongoose";
 import Task               from "../models/Task.js";
 import XpLog              from "../models/XpLog.js";
 import Project            from "../models/Project.js";
@@ -16,6 +17,8 @@ import AuditLog           from "../models/AuditLog.js";
 import Session            from "../models/Session.js";
 import { levelFromTotalXp } from "../services/xpEngine.js";
 import { isOnTime } from "../services/onTimeRule.js";
+import { logAuthBump } from "../utils/authLog.js";
+import { legacyRegisterOpen, pickResetUser } from "../services/authRules.js";
 import { propagateRename } from "../services/propagation.js";
 
 const SALT_ROUNDS  = 12;
@@ -75,6 +78,7 @@ function clientError(res, status, message) {
 // Legacy direct-register (no org). Kept for dev/demo; employees should use
 // POST /api/auth/register-employee instead.
 export async function register(req, res) {
+  if (!legacyRegisterOpen()) return res.status(404).json({ error: "Not found." }); // SEC M-1: closed in production
   const { name, email, password, role } = req.body ?? {};
 
   if (typeof name !== "string" || typeof email !== "string" || typeof password !== "string" || typeof role !== "string") {
@@ -180,6 +184,7 @@ export async function login(req, res) {
 
   // Create Session record (D-022e) — non-blocking
   Session.create({
+    jti:          jwt.decode(token)?.jti ?? null,
     userId:       user._id,
     orgId:        org._id,
     tokenHash:    Session.hashToken(token),
@@ -336,7 +341,7 @@ export async function updateMe(req, res) {
   const before = updates.name ? (await User.findById(req.user.id, "name").lean())?.name : null;
   const user = await User.findByIdAndUpdate(req.user.id, { $set: updates }, { returnDocument: "after" });
   if (!user) return res.status(404).json({ error: "User not found." });
-  if (before && before !== user.name) await User.updateOne({ _id: user._id }, { $addToSet: { previousNames: before } }); // QA4 Y-2: append-only text is corrected on read
+  if (before && before !== user.name) { await User.updateOne({ _id: user._id }, { $pull: { previousNames: user.name } }); await User.updateOne({ _id: user._id }, { $addToSet: { previousNames: before } }); } // the current name is never an old name // QA4 Y-2: append-only text is corrected on read
   if (before && before !== user.name) await propagateRename({ orgId: user.orgId, oldName: before, newName: user.name }).catch((e) => console.error("[propagate]", e.message)); // QA4 Y-2
 
   res.json({ success: true, user: sanitize(user, null, await gamiOf(user._id)) });
@@ -363,6 +368,8 @@ export async function changePassword(req, res) {
   user.password = await bcrypt.hash(newPassword, SALT_ROUNDS);
   user.tokenVersion = (user.tokenVersion ?? 0) + 1;
   await user.save();
+  logAuthBump("PASSWORD_CHANGE", user._id); // SEC M-6 / log
+  await AuditLog.create({ action: "password_changed", orgId: /^[0-9a-f]{24}$/i.test(String(user.orgId ?? "")) ? user.orgId : null, performedBy: user._id, targetUserId: user._id, detail: "Password changed; other sessions were signed out.", scope: "session" }).catch((e) => console.error("[audit]", e.message));
 
   res.json({ success: true, message: "Password updated successfully.", token: signToken(user) });
 }
@@ -407,13 +414,26 @@ export async function updateSettings(req, res) {
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const GENERIC_SENT = { success: true, message: "If that account exists, a reset code has been sent. It expires in 10 minutes." };
 
+// SEC M-8: the account for a forgot/reset request, inside the organization the person names (code like TEST-7843).
+async function resolveResetUser(email, orgCode, select) {
+  const code = String(orgCode ?? "").trim().toUpperCase();
+  const org = code ? await Organization.findOne({ orgCode: code }, "_id").lean() : null;
+  if (code && !org) return { user: null };
+  const users = await User.find({ email }, "_id orgId").lean();
+  const { user: one, needOrgCode } = pickResetUser(users, org ? [String(org._id)] : null);
+  if (needOrgCode) return { needOrgCode };
+  return { user: one ? await User.findById(one._id).select(select) : null };
+}
+
 export async function forgotPassword(req, res) {
   if (!isMailConfigured()) return res.status(503).json({ error: "Email service is not configured" });
 
   const email = String(req.body?.email ?? "").toLowerCase().trim();
   if (!EMAIL_RE.test(email)) return res.status(400).json({ error: "Enter a valid email address." });
 
-  const user = await User.findOne({ email }).select("_id email +resetCodeIssuedAt +resetLockedUntil");
+  const found = await resolveResetUser(email, req.body?.orgCode, "_id email orgId +resetCodeIssuedAt +resetLockedUntil");
+  if (found.needOrgCode) return res.status(400).json({ error: "Enter your organization code too.", code: "ORG_CODE_REQUIRED" });
+  const user = found.user;
   // Same answer whether or not the account exists, and while locked/cooling down (no account probing).
   if (!user || !canIssueCode(user, new Date()).ok) return res.json(GENERIC_SENT);
 
@@ -444,8 +464,9 @@ export async function resetPassword(req, res) {
   }
 
   const bad  = () => res.status(400).json({ error: "Invalid or expired reset code." });
-  const user = await User.findOne({ email: String(email).toLowerCase().trim() })
-    .select("+password +resetCodeHash +resetCodeExpires +resetAttempts +resetLockedUntil");
+  const found = await resolveResetUser(String(email).toLowerCase().trim(), req.body?.orgCode, "+password +resetCodeHash +resetCodeExpires +resetAttempts +resetLockedUntil orgId");
+  if (found.needOrgCode) return res.status(400).json({ error: "Enter your organization code too.", code: "ORG_CODE_REQUIRED" });
+  const user = found.user;
   if (!user) return bad();
 
   const verdict = verifyResetCode(user, code, new Date());
@@ -472,6 +493,8 @@ export async function resetPassword(req, res) {
     }
   );
   if (!spent.modifiedCount) return bad();
+  logAuthBump("PASSWORD_RESET", user._id); // SEC M-6 / log
+  await AuditLog.create({ action: "password_reset", orgId: /^[0-9a-f]{24}$/i.test(String(user.orgId ?? "")) ? user.orgId : null, performedBy: user._id, targetUserId: user._id, detail: "Password reset with an e-mailed code; all sessions were signed out.", scope: "session" }).catch((e) => console.error("[audit]", e.message));
 
   res.json({ success: true, message: "Password reset successfully. You can now log in." });
 }
@@ -580,7 +603,11 @@ export async function getManagerProfileSummary(req, res) {
     ? Math.round((pendingApprovals.length / approvals.length) * 100)
     : 0;
 
+  // QA4 M-19: flags this Manager decided (dismiss / confirm) count as decisions too
+  const flagDecisions = (await Task.aggregate([{ $match: { projectId: { $in: [...myProjectIds].map((x) => new mongoose.Types.ObjectId(x)) }, "reviewFlags.reviewedBy": new mongoose.Types.ObjectId(req.user.id) } }, { $unwind: "$reviewFlags" }, { $match: { "reviewFlags.reviewedBy": new mongoose.Types.ObjectId(req.user.id) } }, { $count: "n" }]))[0]?.n ?? 0;
   const approvalStats = {
+    flagDecisions,
+    noDecisionsYet: approvals.length === 0 && flagDecisions === 0, // the screen says "No decisions yet" instead of a dash
     total:            approvals.length,
     pending:          pendingApprovals.length,
     approved:         approvedCount,
@@ -596,6 +623,10 @@ export async function getManagerProfileSummary(req, res) {
     0.35 * taskCompletionRatio +
     0.25 * Math.max(0, 100 - approvalDelayRate)
   );
+
+  // QA4 M-19 / D-QA4-13: this number is "Decision speed", NOT the proposal's 80% efficiency (that is the AI agreement on Success Metrics). The inputs are shown.
+  const efficiency = { label: "Decision speed", score: efficiencyScore, formula: "40% on-time share of finished tasks + 35% finished share of all tasks + 25% (100 - share of requests still waiting)",
+    inputs: [{ label: "Finished tasks on time", value: onTimePct, unit: "%", weight: 40 }, { label: "Tasks finished", value: taskCompletionRatio, unit: "%", weight: 35 }, { label: "Requests not waiting", value: Math.max(0, 100 - approvalDelayRate), unit: "%", weight: 25 }] };
 
   // ── Activity feed (most recent audit logs) ────────────────────────────────
   const activityFeed = auditLogs.map((l) => ({
@@ -622,6 +653,7 @@ export async function getManagerProfileSummary(req, res) {
       teamPerformance,
       approvalStats,
       efficiencyScore,
+      efficiency,
       activityFeed,
       recentXpActivity,
     },

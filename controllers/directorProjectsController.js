@@ -13,6 +13,7 @@ import { projectHealth } from "../services/projectHealth.js";
 const valid = (id) => mongoose.Types.ObjectId.isValid(id);
 const OPEN = ["Backlog", "To-Do", "In-Progress", "In-Review"];
 const MIN_SCORED = 3; // fewer scored tasks than this → no module average (it would point at one person)
+import { orgProjectScope } from "../services/directorScope.js";
 import { pct } from "../services/moduleProgress.js"; // LB-1: one progress formula for Director and Team Lead
 const person = (u) => (u ? { id: u._id, name: u.name } : null);
 
@@ -20,7 +21,7 @@ const person = (u) => (u ? { id: u._id, name: u.name } : null);
 async function loadProject(req, res) {
   if (!valid(req.params.id)) { res.status(400).json({ error: "Invalid project id." }); return null; }
   const dirIds = (await User.find({ orgId: req.user.orgId, role: "Director" }, "_id").lean()).map((d) => d._id);
-  const project = await Project.findOne({ _id: req.params.id, director: { $in: dirIds } }).populate("managerId", "name").lean();
+  const project = await Project.findOne({ _id: req.params.id, ...(await orgProjectScope(req.user.orgId)) }).populate("managerId", "name").lean();
   if (!project) { res.status(404).json({ error: "Project not found." }); return null; }
   return project;
 }

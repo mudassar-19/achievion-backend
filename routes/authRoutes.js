@@ -4,8 +4,8 @@ import { Router } from "express";
 import { groupsFor, LANDINGS } from "../services/notificationPrefs.js";
 import { isRankable } from "../services/leaderboardRules.js";
 import { register, login, getMe, getProfile, updateMe, changePassword, forgotPassword, resetPassword, updateSettings, getManagerProfileSummary } from "../controllers/authController.js";
-import { listSessions, signOutOtherSessions } from "../controllers/sessionController.js";
-import { verifyToken }                              from "../middleware/authMiddleware.js";
+import { listSessions, signOutOtherSessions, logout } from "../controllers/sessionController.js";
+import { verifyToken, requireRole }                   from "../middleware/authMiddleware.js";
 import * as viewAs                                 from "../controllers/viewAsController.js";
 
 const router = Router();
@@ -19,7 +19,7 @@ router.post("/reset-password",  resetPassword);
 // Protected — requires a valid JWT
 router.get( "/me",       verifyToken, getMe);
 router.get( "/profile",  verifyToken, getProfile);
-router.get( "/manager-profile-summary", verifyToken, getManagerProfileSummary);
+router.get( "/manager-profile-summary", verifyToken, requireRole("Manager"), getManagerProfileSummary); // SEC M-18
 router.patch("/me",       verifyToken, updateMe);
 router.patch("/password", verifyToken, changePassword);
 router.patch("/settings", verifyToken, updateSettings);
@@ -39,6 +39,7 @@ router.get("/settings/options", verifyToken, (req, res) => res.json({
 
 // Sessions — D-022e
 router.get( "/sessions",                  verifyToken, listSessions);
+router.post("/logout",                    verifyToken, logout); // SEC M-2: this session only
 // QA4 Y-1: where an AI entity card opens, for the caller's portal
 router.get( "/ai-destinations",            verifyToken, (req, res) => res.json({ role: req.user.role, map: destinationsFor(req.user.role) }));
 router.post("/sessions/sign-out-others",  verifyToken, signOutOtherSessions);

@@ -125,3 +125,16 @@ export function availabilityFor({ workloadTier: tier, hp }) {
 export function teamWeeklyCapacity({ memberCount, hoursPerDay, workingDays }) {
   return Math.max(0, memberCount) * hoursPerDay * workingDays.length;
 }
+
+// QA4 B-33: holidays may carry a name. Stored as { "YYYY-MM-DD": "Name" } next to the list of dates (the list stays the source of truth).
+export function holidayNamesError(names, holidays = []) {
+  if (names === null || typeof names !== "object" || Array.isArray(names)) return "Holiday names must be an object of date: name.";
+  for (const [d, n] of Object.entries(names)) {
+    if (!holidays.includes(d)) return `${d} is not in the holiday list.`;
+    if (typeof n !== "string") return "A holiday name must be text.";
+    if (n.length > 60) return "A holiday name can be at most 60 characters.";
+  }
+  return null;
+}
+export const pruneHolidayNames = (names = {}, holidays = []) => Object.fromEntries(Object.entries(names).filter(([d]) => holidays.includes(d)));
+export const holidayList = (holidays = [], names = {}) => [...holidays].sort().map((date) => ({ date, name: names[date] ?? "" }));

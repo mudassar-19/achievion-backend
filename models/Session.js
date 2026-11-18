@@ -12,6 +12,10 @@ const sessionSchema = new Schema(
     // SHA-256 of the raw JWT so the token is not stored in plain text.
     tokenHash: { type: String, required: true, unique: true },
 
+    // SEC M-2: the token's jti identifies THIS session; logout marks it revoked (a missing row = an older token, which stays valid).
+    jti:       { type: String, default: null, index: true, sparse: true },
+    revokedAt: { type: Date, default: null },
+
     tokenVersion: { type: Number, default: 0 },
 
     // Device fingerprint from User-Agent

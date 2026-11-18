@@ -33,8 +33,9 @@ export function validateBreakdownReply(obj, { existing = new Map(), maxRows = MA
     const criteria = (Array.isArray(t.acceptanceCriteria) ? t.acceptanceCriteria : []).map((c) => String(c).trim()).filter(Boolean).slice(0, 10).map((c) => c.slice(0, 200));
     const text = [t.title, t.benchmark ?? "", ...criteria];
     if (!text.every(isNeutral)) return { error: "wording" };
-    const hours = Math.min(14, Math.max(1, Math.round(h * 4) / 4)); // D-012 clamp
-    out.push({ title: t.title.trim(), type: t.type, hours, clamped: hours !== Math.round(h * 4) / 4,
+    // D-012 clamp 1-14, and (QA P-7b) WHOLE hours rounded UP: Apply only accepts whole hours, so a quarter-hour suggestion (2.75) used to fail there with 400.
+    const hours = Math.min(14, Math.max(1, Math.ceil(h - 1e-9)));
+    out.push({ title: t.title.trim(), type: t.type, hours, clamped: hours !== h,
       difficulty: DIFFICULTIES.includes(t.difficulty) ? t.difficulty : "Medium", dependsOn: deps, acceptanceCriteria: criteria,
       benchmark: typeof t.benchmark === "string" ? t.benchmark.trim().slice(0, 600) : "" });
   }

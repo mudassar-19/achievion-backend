@@ -2,6 +2,7 @@
 import mongoose     from "mongoose";
 import Organization from "../models/Organization.js";
 import Project      from "../models/Project.js";
+import AuditLog     from "../models/AuditLog.js";
 import Task         from "../models/Task.js";
 import Sprint       from "../models/Sprint.js";
 import Quest        from "../models/Quest.js";
@@ -77,7 +78,7 @@ export async function getHome(req, res) {
       return { id: s._id, name: s.name, endDate: s.endDate ?? null, done, total, pct: total ? Math.round((done / total) * 100) : 0 };
     }),
     teamActivity: { xpThisWeek: xp.this ?? 0, xpLastWeek: xp.last ?? 0, activeStreaks },
-    openAnomalies: flagAgg[0]?.n ?? 0,
+    openAnomalies: (flagAgg[0]?.n ?? 0) + Math.min(50, await AuditLog.countDocuments({ orgId: org?._id, action: "xp_adjust_flagged", scope: "anomaly" })), // QA4 M-11: same number as the Anomalies screen
     runningChallenges,
   });
 }

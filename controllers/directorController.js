@@ -24,6 +24,8 @@ import XpLog from "../models/XpLog.js";
 import { shouldFlagAdjust } from "../services/xpAdjustRules.js";
 import { xpTotalsByRole } from "../services/xpByRole.js";
 import { cleanDetail, auditSentence, whenText } from "../services/auditText.js";
+import { orgProjectScope } from "../services/directorScope.js";
+import { logAuthBump } from "../utils/authLog.js";
 import { loadRenames, applyRenames } from "../services/propagation.js";
 
 // Map a role string to its category label (mirrors ROLE_CATEGORY_MAP)
@@ -54,7 +56,7 @@ async function orgMemberIds(orgId) {
 export async function getDirectorProfile(req, res) {
   const { orgId, id: directorId } = req.user;
 
-  const org = await Organization.findOne(orgFilter(orgId), "name orgId createdAt _id").lean();
+  const org = await Organization.findOne(orgFilter(orgId), "name orgId createdAt _id workingTime.timezone").lean();
   if (!org) return res.status(404).json({ error: "Organization not found." });
 
   const director = await User.findById(directorId, "name email role department createdAt").lean();
@@ -75,8 +77,8 @@ export async function getDirectorProfile(req, res) {
     Approval.countDocuments({ orgId: org._id, status: "REJECTED" }),
     Approval.countDocuments({ orgId: org._id, status: "PENDING"  }),
     AuditLog.countDocuments({ orgId: org._id, performedBy: directorId, action: "role_change" }),
-    Project.countDocuments({ director: directorId, status: "Active" }), // C-9: same meaning as the dashboard
-    Project.countDocuments({ director: directorId, status: { $nin: ["Deleted"] }, isDeleted: { $ne: true } }),
+    Project.countDocuments({ ...(await orgProjectScope(orgId)), status: "Active" }), // P-12 org-wide; C-9: same meaning as the dashboard
+    Project.countDocuments({ ...(await orgProjectScope(orgId)), status: { $nin: ["Deleted"] }, isDeleted: { $ne: true } }),
     User.countDocuments(activeFilter([org._id.toString()], { employeesOnly: true })), // C-10: active employees only
     AuditLog.find({ $or: [{ orgId: org._id }, { performedBy: org.orgId }] })
       .sort({ createdAt: -1 })
@@ -86,6 +88,10 @@ export async function getDirectorProfile(req, res) {
   ]);
 
   const subsTotal = subsApproved + subsRejected;
+  // QA4: every recent event is a sentence with who did it, one time format, no raw keys (the screen shows `sentence`)
+  const actorIds = [...new Set(recentLogs.map((l) => l.performedBy).filter((v) => v && /^[0-9a-f]{24}$/i.test(String(v))).map(String))];
+  const actors = new Map((await User.find({ _id: { $in: actorIds } }, "name").lean()).map((u) => [String(u._id), u.name]));
+  const renames = await loadRenames(org._id);
 
   res.json({
     name:       director.name,
@@ -120,7 +126,9 @@ export async function getDirectorProfile(req, res) {
       oldRole:    l.oldRole   ?? null,
       newRole:    l.newRole   ?? null,
       newStatus:  l.newStatus ?? null,
-      detail:     l.detail    ?? null,
+      detail:     applyRenames(cleanDetail(l.detail), renames) ?? null,
+      sentence:   applyRenames(auditSentence({ action: l.action, performerName: actors.get(String(l.performedBy)) ?? null, targetName: l.targetUserId?.name, projectTitle: l.projectTitle, oldRole: l.oldRole, newRole: l.newRole, detail: l.detail }), renames),
+      when:       whenText(l.createdAt, org.workingTime?.timezone),
       createdAt:  l.createdAt,
     })),
   });
@@ -141,7 +149,7 @@ export async function getDashboard(req, res) {
 
   const [activeProjects, pendingCount, burnoutProfiles, avgAiScore] =
     await Promise.all([
-      Project.countDocuments({ director: directorUserId, status: "Active" }),
+      Project.countDocuments({ ...(await orgProjectScope(orgId)), status: "Active" }),
       decisionCounts(orgObjectId), // C-5: account approvals + extension requests, one count
       GamificationProfile.find({ orgId, hp: { $lt: 40 } })
         .populate("userId", "name role status")
@@ -356,7 +364,7 @@ export async function getTeam(req, res) {
       { $group: { _id: { $arrayElemAt: ["$assignees", 0] }, count: { $sum: 1 } } },
     ]),
     // Org projects with member lists + managerId
-    Project.find({ director: { $in: dirIds }, status: { $ne: "Deleted" } }, "title members managerId").lean(),
+    Project.find({ ...(await orgProjectScope(orgId)), status: { $ne: "Deleted" } }, "title members managerId").lean(),
   ]);
 
   const profileMap = Object.fromEntries(profiles.map((p) => [p.userId.toString(), p]));
@@ -454,7 +462,7 @@ export async function getGarden(req, res) {
   const dirIds      = directorIds.map((d) => d._id);
 
   const projects = await Project.find(
-    { director: { $in: dirIds }, status: { $ne: "Deleted" } },
+    { ...(await orgProjectScope(orgId)), status: { $ne: "Deleted" } },
     "title status startDate deadline completedAt archivedAt updatedAt createdAt managerId"
   ).populate("managerId", "name").lean();
 
@@ -482,7 +490,7 @@ export async function getProjects(req, res) {
   const directorIds = await User.find({ orgId, role: "Director" }, "_id").lean();
   const dirIds      = directorIds.map((d) => d._id);
 
-  const projects = await Project.find({ director: { $in: dirIds } })
+  const projects = await Project.find({ ...(await orgProjectScope(orgId)) })
     .populate("director",  "name")
     .populate("managerId", "name")
     .sort({ createdAt: -1 })
@@ -520,7 +528,7 @@ export async function updateProjectXpPool(req, res) {
   const directorIds = await User.find({ orgId: req.user.orgId, role: "Director" }, "_id").lean();
   const project     = await Project.findOne({
     _id:      projectId,
-    director: { $in: directorIds.map((d) => d._id) },
+    ...(await orgProjectScope(req.user.orgId)),
   });
 
   if (!project) return res.status(404).json({ error: "Project not found." });
@@ -946,17 +954,22 @@ export async function updateMemberStatus(req, res) {
   const { userId } = req.params;
   const { orgId }  = req.user;
   const { status } = req.body;
+  const reason = String(req.body?.reason ?? "").trim();
 
-  const VALID = ["active", "inactive", "suspended"];
-  if (!VALID.includes(status)) return res.status(400).json({ error: "Invalid status." });
+  // SEC M-23: only active or suspended ("inactive" is not a real state), always with a reason, never on oneself or a Director
+  if (!["active", "suspended"].includes(status)) return res.status(400).json({ error: "Status must be active or suspended." });
+  if (reason.length < 5 || reason.length > 500) return res.status(400).json({ error: "Give a reason (5 to 500 characters)." });
+  if (String(userId) === String(req.user.id)) return res.status(400).json({ error: "You cannot change your own status." });
 
   const member = await User.findOneAndUpdate(
-    { _id: userId, orgId },
-    { $set: { status } },
+    { _id: userId, orgId, role: { $ne: "Director" }, status: { $ne: "deleted" } },
+    { $set: { status }, $inc: { tokenVersion: 1 } }, // a changed status signs the person out of every session
     { returnDocument: "after", select: "name email role status" }
   ).lean();
 
   if (!member) return res.status(404).json({ error: "Member not found." });
+  logAuthBump("DIRECTOR_STATUS", member._id);
+  await AuditLog.create({ action: "account_status_change", orgId: member.orgId ?? undefined, performedBy: req.user.id, targetUserId: member._id, newStatus: status, detail: `Status set to ${status} by the Director. Reason: ${reason}`, scope: "account" }).catch((e) => console.error("[audit]", e.message));
 
   res.json({ id: member._id, name: member.name, status: member.status });
 }
@@ -1074,7 +1087,7 @@ export async function getProjectDetail(req, res) {
     return res.status(400).json({ error: "Invalid project id." });
 
   const dirIds = (await User.find({ orgId, role: "Director" }, "_id").lean()).map(d => d._id);
-  const project = await Project.findOne({ _id: id, director: { $in: dirIds } })
+  const project = await Project.findOne({ _id: id, ...(await orgProjectScope(orgId)) })
     .populate("managerId", "name email role")
     .populate("director",  "name")
     .lean();

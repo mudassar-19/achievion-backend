@@ -64,8 +64,8 @@ function uptime(stress) {
     target: T.source, targetPct: T.pct, targetMinutes: T.minutes };
 }
 
-export const buildSuccessMetrics = ({ surveys, aiCases, perfRows, stress, aiPairs = [] }) =>
-  ({ satisfaction: satisfaction(surveys), ai: ai(aiCases), efficiency: aiAgreement(aiPairs), speed: speed(perfRows), uptime: uptime(stress) });
+export const buildSuccessMetrics = ({ surveys, aiCases, perfRows, stress, aiPairs = [], feedback = [] }) =>
+  ({ satisfaction: satisfaction(surveys), aiThumbs: aiThumbs(feedback), ai: ai(aiCases), efficiency: aiAgreement(aiPairs), speed: speed(perfRows), uptime: uptime(stress) });
 
 // QA4 D-QA4-13: the proposal's "80% efficiency" = the AI evaluation is acceptable: within 20 points of the Team Lead (or Director) score,
 // on at least 30 evaluated cases. Shown on Success Metrics; the Manager profile's old "Efficiency" is now called "Decision speed".
@@ -77,4 +77,15 @@ export function aiAgreement(pairs = []) {
   const withinPct = Math.round((ok.filter((p) => Math.abs(p.aiScore - p.tlScore) <= EFFICIENCY.withinPoints).length / n) * 100);
   if (n < EFFICIENCY.cases) return { ...base, status: "IN PROGRESS", withinPct };
   return { ...base, status: withinPct >= EFFICIENCY.passPct ? "VERIFIED" : "NOT VERIFIED", withinPct };
+}
+
+// QA4 M-34(f): thumbs on AI answers (Manager, Team Lead, Director). Supporting evidence for "85% enjoyable and easy"; the survey stays the main measure.
+export const THUMBS = { minResponses: 20, upPct: 85 };
+export function aiThumbs(rows = []) {
+  const up = rows.filter((r) => r.rating === "up").length, down = rows.filter((r) => r.rating === "down").length, n = up + down;
+  const base = { up, down, n, needed: THUMBS.minResponses, progress: `${Math.min(n, THUMBS.minResponses)} of ${THUMBS.minResponses} ratings`, target: "Supporting evidence for the 85% satisfaction target: share of thumbs up on AI answers." };
+  if (!n) return { ...base, status: "NO DATA", upPct: null };
+  const upPct = Math.round((up / n) * 100);
+  if (n < THUMBS.minResponses) return { ...base, status: "IN PROGRESS", upPct };
+  return { ...base, status: upPct >= THUMBS.upPct ? "VERIFIED" : "NOT VERIFIED", upPct };
 }

@@ -22,7 +22,7 @@ export function parseListQuery(q = {}) {
     archived: q.archived === "1" || q.archived === "true" || q.archived === true,
     page:     Number.isFinite(page) && page > 0 ? page : 1,
     limit:    PAGE_SIZE,
-    sort:     SORTS.includes(q.sort) ? q.sort : "deadline",
+    sort:     SORTS.includes(q.sort) ? q.sort : "status", // QA4 M-41: Active first by default
     dir:      q.dir === "desc" ? -1 : 1,
   };
 }
@@ -119,3 +119,11 @@ export function archiveTransition(project, action) {
   }
   return { error: "Unknown action." };
 }
+
+// QA4 M-41: Active work first, then the other open states, finished last; inside a group by deadline (no deadline last).
+const RANK = ["Active", "Delayed", "In Review", "On Hold", "Frozen", "Planning", "Scheduled", "Completed", "Archived"];
+export const statusRank = (s) => { const i = RANK.indexOf(s); return i < 0 ? RANK.length : i; };
+export const sortProjects = (list) => [...list].sort((a, b) => statusRank(a.status) - statusRank(b.status)
+  || (a.deadline ? +new Date(a.deadline) : Infinity) - (b.deadline ? +new Date(b.deadline) : Infinity) || String(a.title).localeCompare(String(b.title)));
+// Chip counts for every status the list can show, zero included.
+export const statusCounts = (list) => Object.fromEntries(LIST_STATUSES.map((s) => [s, list.filter((p) => p.status === s).length]));

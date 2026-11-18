@@ -202,8 +202,8 @@ export async function publishQuest(req, res) {
   const reasons = publishBlockers(q, { participants: inScope.length });
   if (reasons.length) return res.status(409).json({ error: reasons[0], reasons });
   if (scope.pfilter.managerId && q.status === "draft") { // QA4 M-37: weekly reward budget of a Manager
-    const used = weeklyBudgetUsed(await Quest.find({ createdBy: req.user.id, status: { $in: ["active", "completed", "expired"] }, publishedAt: { $gte: new Date(Date.now() - 7 * 86_400_000) } }, "rewardXp participants publishedAt").lean());
-    if (used + q.rewardXp * inScope.length > MANAGER_WEEKLY_XP_BUDGET) return res.status(409).json({ error: `This would promise more than your weekly reward budget (${MANAGER_WEEKLY_XP_BUDGET} XP). Lower the reward or the number of people, or ask the Director.`, code: "REWARD_BUDGET" });
+    const used = weeklyBudgetUsed(await Quest.find({ createdBy: req.user.id, status: { $in: ["active", "completed", "expired"] }, publishedAt: { $gte: new Date(Date.now() - 7 * 86_400_000) } }, "rewardXp").lean());
+    if (used + q.rewardXp > MANAGER_WEEKLY_XP_BUDGET) return res.status(409).json({ error: `This would promise more reward XP than your running challenges may carry together (${MANAGER_WEEKLY_XP_BUDGET} XP per person). Lower the reward, end a running challenge, or ask the Director.`, code: "REWARD_BUDGET" });
   }
   const done = await Quest.findOneAndUpdate({ _id: q._id, status: "draft" },
     { $set: { status: "active", entry, participants, progress: [], publishedAt: new Date(), seriesId: q.repeat ? q._id : null } }, { returnDocument: "after" });
@@ -312,7 +312,9 @@ export async function listAnomalies(req, res) {
 export async function anomalyCount(req, res) {
   const scope = await scopeOr404(req, res); if (!scope) return;
   const [r] = await Task.aggregate([{ $match: flagMatch(scope) }, { $unwind: "$reviewFlags" }, { $match: { "reviewFlags.status": "open" } }, { $count: "n" }]);
-  res.json({ open: r?.n ?? 0 });
+  // QA4 M-11: the list also shows Director XP-adjustment flags (up to 50), so the count includes them: one number everywhere
+  const adj = await AuditLog.countDocuments({ orgId: scope.org._id, action: "xp_adjust_flagged", scope: "anomaly" });
+  res.json({ open: (r?.n ?? 0) + Math.min(50, adj) });
 }
 
 async function loadFlag(req, res, scope, fields = "") {

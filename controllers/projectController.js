@@ -230,6 +230,9 @@ export async function createMilestone(req, res) {
 export async function updateMilestone(req, res) {
   const { orgId } = req.user;
   const { milestoneId } = req.params;
+  // SEC P-2: the project must be in the caller's organization before one of its modules can change
+  const resolvedOrg = await resolveOrgQuery(orgId);
+  if (!resolvedOrg || !(await Project.exists({ _id: req.params.id, ...resolvedOrg.filter }))) return res.status(404).json({ error: "Milestone not found." });
 
   const allowed = ["title", "description", "notes", "status", "startDate", "dueDate", "progress", "order"];
   const updates = {};
@@ -266,6 +269,9 @@ export async function updateMilestone(req, res) {
 // ── DELETE /api/manager/projects/:id/milestones/:milestoneId ─────────────────
 export async function deleteMilestone(req, res) {
   const { milestoneId } = req.params;
+  // SEC P-2: the project must be in the caller's organization before one of its modules can go
+  const resolved = await resolveOrgQuery(req.user.orgId);
+  if (!resolved || !(await Project.exists({ _id: req.params.id, ...resolved.filter }))) return res.status(404).json({ error: "Milestone not found." });
 
   const milestone = await Milestone.findOneAndDelete({
     _id: milestoneId, projectId: req.params.id,

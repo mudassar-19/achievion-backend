@@ -20,7 +20,7 @@ const PHRASE = {
   role_change: "changed the role of", account_status_change: "changed the account status of", account_deleted: "removed the account of", employee_created: "created the account of",
   project_created: "created the project", project_updated: "updated the project", project_status_changed: "changed the status of the project", report_exported: "exported a report",
   company_community_created: "created the Company community", company_members_added: "added people to the Company community", workspace_updated: "updated the workspace settings", settings_updated: "updated settings",
-  xp_adjusted: "adjusted XP for", sprint_started: "started a sprint", sprint_closed: "closed a sprint", task_reassigned: "reassigned a task",
+  xp_adjusted: "adjusted XP for", password_changed: "changed their password", password_reset: "reset their password", session_revoked: "signed out their other sessions", sprint_started: "started a sprint", sprint_closed: "closed a sprint", task_reassigned: "reassigned a task",
 };
 const sentence = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const humanize = (a) => sentence(String(a).replace(/_/g, " ").toLowerCase());

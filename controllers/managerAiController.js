@@ -13,6 +13,7 @@ import User        from "../models/User.js";
 import AIPromptLog from "../models/AIPromptLog.js";
 import AIChat      from "../models/AIChat.js";
 import AIFeedback  from "../models/AIFeedback.js";
+import Notification from "../models/Notification.js";
 import AICache     from "../models/AICache.js";
 import { getPrompt } from "../ai/prompts/registry.js";
 import { callChain, aiConfigured } from "../services/aiChain.js";
@@ -405,4 +406,26 @@ export async function explainAnomaly(req, res) {
     const saved = await cachePut(key, req.user.orgId, "mgr_anomaly_explain", value, 7 * DAY);
     res.json({ ...value, cachedAt: saved.updatedAt, key, usage: spent(g.usage, fromCache), aiGenerated: true });
   } catch (err) { aiFail(res, err, g.usage); }
+}
+
+// ── QA4 M-14: the person can delete their own past chats (one, or all). Only their own: userId and orgId must match. ──
+export async function deleteChat(req, res) {
+  if (!valid(req.params.id)) return res.status(404).json({ error: "Chat not found." });
+  const r = await AIChat.deleteOne({ _id: req.params.id, userId: req.user.id, orgId: req.user.orgId });
+  if (!r.deletedCount) return res.status(404).json({ error: "Chat not found." });
+  res.json({ ok: true, deleted: 1 });
+}
+export async function deleteAllChats(req, res) {
+  const r = await AIChat.deleteMany({ userId: req.user.id, orgId: req.user.orgId });
+  res.json({ ok: true, deleted: r.deletedCount ?? 0 });
+}
+
+// ── QA4 M-13: the AI button shows a dot when there is something new: unread "team digest" notes. Opening the drawer marks them seen. ──
+export async function unseenInsights(req, res) {
+  const count = await Notification.countDocuments({ userId: req.user.id, type: "ai_digest", read: false });
+  res.json({ count, hasNew: count > 0 });
+}
+export async function markInsightsSeen(req, res) {
+  const r = await Notification.updateMany({ userId: req.user.id, type: "ai_digest", read: false }, { $set: { read: true } });
+  res.json({ ok: true, marked: r.modifiedCount ?? 0 });
 }

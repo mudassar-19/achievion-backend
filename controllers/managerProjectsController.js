@@ -16,7 +16,7 @@ import { healthForProjects }  from "../services/projectHealthService.js";
 import { orgWorkTime, workingDaysLeft } from "../services/workloadRules.js";
 import { moduleOverdueDays } from "../services/completionRules.js";
 import { setupState, NOT_MEMBER_ROLES } from "../services/projectSetupRules.js";
-import { parseListQuery, validateProjectInput, extensionDecision, archiveTransition, PAGE_SIZE } from "../services/projectRules.js";
+import { parseListQuery, validateProjectInput, extensionDecision, archiveTransition, PAGE_SIZE, sortProjects, statusCounts } from "../services/projectRules.js";
 import { isDisagreement } from "../services/aiEvalRules.js";
 
 const IS_OID = /^[0-9a-f]{24}$/i;
@@ -68,12 +68,15 @@ export async function listProjects(req, res) {
   if (q.priority.length) filter.priority = { $in: q.priority };
   if (q.search) filter.title = { $regex: q.search, $options: "i" };
 
-  const [total, projects] = await Promise.all([
+  // QA4 M-41: default order = Active first (statusRank), then deadline; chip counts cover the Manager's open projects whatever chip is chosen.
+  const byStatus = q.sort === "status";
+  const [total, found, countRows] = await Promise.all([
     Project.countDocuments(filter),
-    Project.find(filter, "title status priority deadline startDate members archivedAt")
-      .populate("members", "name role")
-      .sort({ [q.sort]: q.dir, _id: 1 }).skip((q.page - 1) * PAGE_SIZE).limit(PAGE_SIZE).lean(),
+    byStatus ? Project.find(filter, "title status priority deadline startDate members archivedAt").populate("members", "name role").lean()
+      : Project.find(filter, "title status priority deadline startDate members archivedAt").populate("members", "name role").sort({ [q.sort]: q.dir, _id: 1 }).skip((q.page - 1) * PAGE_SIZE).limit(PAGE_SIZE).lean(),
+    Project.find({ ...scope.pfilter, isDeleted: { $ne: true }, status: { $nin: ["Archived", "Deleted"] } }, "status").lean(),
   ]);
+  const projects = byStatus ? (q.dir === -1 ? sortProjects(found).reverse() : sortProjects(found)).slice((q.page - 1) * PAGE_SIZE, q.page * PAGE_SIZE) : found;
   const [health, mods] = await Promise.all([
     healthForProjects(projects, new Date()),
     Milestone.find({ projectId: { $in: projects.map((p) => p._id) } }, "projectId teamLeadId").lean(),
@@ -85,7 +88,7 @@ export async function listProjects(req, res) {
     return !setupState({ modules: m, memberCount: (p.members ?? []).filter((u) => !NOT_MEMBER_ROLES.includes(u?.role)).length }).complete;
   };
   res.json({
-    total, page: q.page, pageSize: PAGE_SIZE,
+    total, page: q.page, pageSize: PAGE_SIZE, counts: statusCounts(countRows),
     items: projects.map((p) => {
       const h = health.get(String(p._id));
       return {

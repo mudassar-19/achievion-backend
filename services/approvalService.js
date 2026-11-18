@@ -1,4 +1,5 @@
 import Approval      from "../models/Approval.js";
+import { logAuthBump } from "../utils/authLog.js";
 import Notification  from "../models/Notification.js";
 import User          from "../models/User.js";
 import Organization  from "../models/Organization.js";
@@ -178,6 +179,7 @@ export async function executeApproval(approvalId, approverId = null, directorNot
           { status: "suspended", $inc: { tokenVersion: 1 } },
           { returnDocument: "after" }
         );
+        logAuthBump("SUSPEND_APPROVED", targetEmployeeId);
         // Move orphan tasks to Backlog
         const orphanCount = await Task.countDocuments({
           assignees: targetEmployeeId,
@@ -321,6 +323,7 @@ export async function rejectApproval(approvalId, rejectionReason = null, approve
       approval.targetEmployeeId,
       { status: "active", $inc: { tokenVersion: 1 } }
     );
+    logAuthBump("EMERGENCY_SUSPEND_REJECTED", approval.targetEmployeeId);
     await AuditLog.create({
       orgId: approval.orgId, action: "member_suspend_reverted",
       performedBy: approverId ?? approval.orgId, targetUserId: approval.targetEmployeeId,

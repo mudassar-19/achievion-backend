@@ -6,6 +6,7 @@ import jwt          from "jsonwebtoken";
 import crypto       from "node:crypto";
 import { ROLE_CATEGORY_MAP } from "../models/User.js";
 import { listView } from "../services/sessionRules.js";
+import { logAuthBump } from "../utils/authLog.js";
 
 function signToken(user) {
   return jwt.sign(
@@ -59,7 +60,8 @@ export async function signOutOtherSessions(req, res) {
   const newHash  = Session.hashToken(newToken);
 
   // Update current session with new tokenHash
-  await Session.updateOne({ tokenHash: current }, { $set: { tokenHash: newHash, lastSeenAt: new Date() } });
+  await Session.updateOne({ tokenHash: current }, { $set: { tokenHash: newHash, jti: jwt.decode(newToken)?.jti ?? null, lastSeenAt: new Date() } });
+  logAuthBump("SIGN_OUT_OTHERS", userId); // SEC
 
   const orgOid = /^[0-9a-f]{24}$/i.test(orgId)
     ? new mongoose.Types.ObjectId(orgId)
@@ -83,4 +85,15 @@ export async function touchSession(tokenHash, userId) {
     { tokenHash, userId: new mongoose.Types.ObjectId(userId) },
     { $set: { lastSeenAt: new Date() } }
   ).catch(() => {});  // fire-and-forget; never block the request
+}
+
+// ── POST /api/auth/logout  (SEC M-2) — revokes THIS session only; every other session of the person keeps working ──
+export async function logout(req, res) {
+  const raw = req.headers.authorization?.replace("Bearer ", "") ?? "";
+  const jti = jwt.decode(raw)?.jti ?? null;
+  const tokenHash = Session.hashToken(raw);
+  // A session row is marked revoked (not deleted: a missing row would mean "older token", which stays valid). Older tokens get a revoked row now.
+  await Session.updateOne({ $or: [{ tokenHash }, ...(jti ? [{ jti }] : [])] },
+    { $set: { revokedAt: new Date(), ...(jti ? { jti } : {}) }, $setOnInsert: { userId: new mongoose.Types.ObjectId(req.user.id), tokenHash, device: req.headers["user-agent"]?.slice(0, 200) ?? "Unknown", createdAt: new Date() } }, { upsert: true });
+  res.json({ ok: true });
 }

@@ -533,7 +533,8 @@ export async function searchUsers(req, res) {
   // E-3 (D-QA3B-4): an empty search lists the whole organisation A-Z (the person picks from the list); typing filters it.
   const where = { orgId, _id: { $ne: req.user.id }, status: { $nin: ["deleted", "suspended"] }, role: { $ne: "org_admin" } };
   if (q) where.$or = [{ name: { $regex: q, $options: "i" } }, ...(fields.includes("email") ? [{ email: { $regex: q, $options: "i" } }] : [])];
-  const users = await User.find(where, fields).sort({ name: 1 }).limit(q ? 30 : 100).lean(); // items 73/74: never yourself; 30 so prefix matches are not cut off before the client ranks them
+  // items 73/74: never yourself. A to Z means people order ("anna" next to "Anna"), not database byte order, so sort here, then cut (30 with a search so prefix matches are not cut off before the client ranks them).
+  const users = (await User.find(where, fields).limit(600).lean()).sort((a, b) => String(a.name).localeCompare(String(b.name), undefined, { sensitivity: "base" })).slice(0, q ? 30 : 100);
   res.json(users);
 }
 

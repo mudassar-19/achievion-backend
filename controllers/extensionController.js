@@ -92,9 +92,10 @@ export async function requestExtension(req, res) {
     originalDeadline: task.deadline ?? null,
   });
 
-  // Notify Director(s) in this org
+  // Notify the decider: up to the limit the project's Manager decides (QA4 D-QA4-12), above it the Director(s)
   const { default: User } = await import("../models/User.js");
-  const directors = await User.find({ orgId, role: "Director", status: { $ne: "deleted" } }, "_id").lean();
+  const mgrId = requestedDays <= maxDays && task.projectId ? (await Project.findById(task.projectId, "managerId").lean())?.managerId : null;
+  const directors = mgrId && String(mgrId) !== String(userId) ? [{ _id: mgrId }] : await User.find({ orgId, role: "Director", status: { $ne: "deleted" } }, "_id").lean();
   const [who, proj] = await Promise.all([User.findById(userId, "name").lean(), task.projectId ? Project.findById(task.projectId, "title").lean() : null]); // B-3: name the person and the project
   for (const dir of directors) {
     await createNotification({
@@ -193,7 +194,14 @@ export async function decideExtension(req, res) {
   if (ext.status !== "pending")
     return res.status(409).json({ error: "Extension request already decided." });
 
-  const org = await Organization.findOne(orgFilter(orgId), "_id").lean();
+  const org = await Organization.findOne(orgFilter(orgId), "_id extensionRules").lean();
+  // QA4 D-QA4-12: a Manager decides requests up to the limit (default 3 working days) on projects they manage; above that only the Director.
+  if (req.user.role === "Manager") {
+    const limit = org?.extensionRules?.extensionMaxDays ?? 3;
+    const own = ext.projectId && await Project.exists({ _id: ext.projectId, managerId: req.user.id });
+    if (!own) return res.status(404).json({ error: "Extension request not found." });
+    if (ext.requestedDays > limit || (action === "counter_propose" && counterDays > limit)) return res.status(403).json({ error: `Requests above ${limit} working days are decided by the Director.`, code: "NEEDS_DIRECTOR", limit });
+  }
 
   const update = {
     decidedBy:    new mongoose.Types.ObjectId(directorId),
@@ -266,4 +274,14 @@ export async function decideExtension(req, res) {
   });
 
   res.json({ extension: updated });
+}
+
+// QA4 D-QA4-12: GET /api/manager/extensions/pending: pending requests on this Manager's projects that they may decide (up to the limit).
+export async function listManagerPendingExtensions(req, res) {
+  const org = await Organization.findOne(orgFilter(req.user.orgId), "_id extensionRules").lean();
+  if (!org) return res.status(404).json({ error: "Org not found." });
+  const limit = org.extensionRules?.extensionMaxDays ?? 3;
+  const pids = (await Project.find({ managerId: req.user.id, isDeleted: { $ne: true } }, "_id").lean()).map((p) => p._id);
+  const rows = await ExtensionRequest.find({ orgId: org._id, projectId: { $in: pids }, status: "pending" }).populate("requestedBy", "name").populate("taskId", "title").populate("projectId", "title").sort({ createdAt: 1 }).limit(50).lean();
+  res.json({ limit, items: rows.map((e) => ({ id: e._id, task: e.taskId?.title ?? null, project: e.projectId?.title ?? null, requestedBy: e.requestedBy?.name ?? "Former member", days: e.requestedDays, reason: e.reason, createdAt: e.createdAt, canDecide: e.requestedDays <= limit })) });
 }

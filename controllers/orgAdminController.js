@@ -3,12 +3,13 @@ import { Types } from "mongoose";
 import Organization      from "../models/Organization.js";
 import User, { ROLE_CATEGORY_MAP, VALID_ROLES } from "../models/User.js";
 import AuditLog          from "../models/AuditLog.js";
+import { logAuthBump } from "../utils/authLog.js";
 import Approval          from "../models/Approval.js";
 import Notification      from "../models/Notification.js";
 import Task              from "../models/Task.js";
 import * as approvalSvc  from "../services/approvalService.js";
 import { sanitizeApproval } from "./approvalController.js";
-import { validateSuspendReason } from "../services/orgAdminRules.js";
+import { validateSuspendReason, orgPasswordError, orgNameError } from "../services/orgAdminRules.js";
 import { defaultDepartmentFor, needsDefaults, DEFAULT_DEPARTMENTS } from "../services/departmentDefault.js";
 import { firstLengthError } from "../services/textLimits.js";
 
@@ -466,6 +467,7 @@ export async function updateEmployeeStatus(req, res) {
       return clientError(res, 403, "Director accounts cannot be emergency-suspended.");
     }
     await User.findByIdAndUpdate(user._id, { status: "suspended", $inc: { tokenVersion: 1 } });
+    logAuthBump("EMERGENCY_SUSPEND", user._id); // SEC log
     // Move orphan tasks to Backlog (same as normal suspend)
     const orphanCount = await Task.countDocuments({
       assignees: user._id,
@@ -633,4 +635,41 @@ export async function listDeletedEmployees(req, res) {
       totalPages: Math.ceil(total / limitNum) || 1,
     },
   });
+}
+
+// ── QA4 A-3: the Org admin's own Account and Organization pages ────────────────
+// GET /api/org/account → who is signed in (the e-mail and the organization code are read-only).
+export async function getOrgAccount(req, res) {
+  const org = await Organization.findOne({ orgId: req.org.orgId }, "adminEmail orgCode name createdAt").lean();
+  if (!org) return clientError(res, 404, "Organization not found.");
+  return res.json({ success: true, data: { email: org.adminEmail, role: "Organization admin", organizationName: org.name, orgCode: org.orgCode ?? null, memberSince: org.createdAt, locked: ["email", "role", "orgCode"] } });
+}
+// PATCH /api/org/account/password { currentPassword, newPassword }
+export async function changeOrgPassword(req, res) {
+  const err = orgPasswordError(req.body ?? {});
+  if (err) return clientError(res, 400, err);
+  const org = await Organization.findOne({ orgId: req.org.orgId }).select("+passwordHash");
+  if (!org) return clientError(res, 404, "Organization not found.");
+  if (!(await bcrypt.compare(req.body.currentPassword, org.passwordHash))) return clientError(res, 401, "Your current password is not correct.");
+  org.passwordHash = await bcrypt.hash(req.body.newPassword, 12);
+  await org.save({ validateModifiedOnly: true });
+  return res.json({ success: true, message: "Password updated." });
+}
+// GET /api/org/organization → the organization's own details
+export async function getOrganization(req, res) {
+  const org = await Organization.findOne({ orgId: req.org.orgId }, "name orgCode createdAt companySize departments status workingTime.timezone").lean();
+  if (!org) return clientError(res, 404, "Organization not found.");
+  const people = await User.countDocuments({ orgId: String(org._id), status: { $ne: "deleted" } });
+  return res.json({ success: true, data: { name: org.name, orgCode: org.orgCode ?? null, createdAt: org.createdAt, companySize: org.companySize ?? null, departments: org.departments ?? [], status: org.status, timezone: org.workingTime?.timezone ?? "Asia/Karachi", people, locked: ["orgCode", "createdAt"] } });
+}
+// PATCH /api/org/organization { name?, companySize? }
+export async function updateOrganization(req, res) {
+  const org = await Organization.findOne({ orgId: req.org.orgId });
+  if (!org) return clientError(res, 404, "Organization not found.");
+  const before = org.name;
+  if (req.body?.name !== undefined) { const err = orgNameError(req.body.name); if (err) return clientError(res, 400, err); org.name = String(req.body.name).trim(); }
+  if (req.body?.companySize !== undefined) org.companySize = String(req.body.companySize).slice(0, 40);
+  await org.save({ validateModifiedOnly: true });
+  if (before !== org.name) await AuditLog.create({ action: "workspace_updated", orgId: org._id, performedBy: org._id, detail: `Organization renamed from "${before}" to "${org.name}" by the organization admin.`, scope: "org" }).catch(() => {});
+  return res.json({ success: true, data: { name: org.name, companySize: org.companySize ?? null } });
 }

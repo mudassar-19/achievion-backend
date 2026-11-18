@@ -228,7 +228,7 @@ export async function getLeaderboard(req, res) {
   // U-1 (D-133): one leaderboard for every portal (UC-13, FR05-05). Only XP roles are ranked, never Managers/Directors.
   const { id: userId, orgId, role } = req.user;
   const scopes = scopesFor(role);
-  const tab = TABS.includes(req.query.tab) ? req.query.tab : "all";
+  const tab = TABS.includes(req.query.tab) ? req.query.tab : (role === "Team Lead" ? "teamleads" : "all"); // a Team Lead lands on their own tab ("All" leaves Team Leads out)
   const asked  = req.query.scope === "org" ? "company" : req.query.scope;
   const scope  = scopes.includes(asked) ? asked : scopes[0];
   const period = { weekly: "week", monthly: "month", overall: "all" }[req.query.timeRange] ?? (["week", "month", "all"].includes(req.query.period) ? req.query.period : "all");

@@ -3,7 +3,7 @@ import AuditLog     from "../models/AuditLog.js";
 import User         from "../models/User.js";
 import { validateAlertRules } from "../services/alertRules.js";
 import { mergeSettings } from "../utils/mergeSettings.js";
-import { readHolidays } from "../services/workloadRules.js";
+import { readHolidays, holidayNamesError, pruneHolidayNames, holidayList } from "../services/workloadRules.js";
 
 const IS_OBJECT_ID = /^[0-9a-f]{24}$/i;
 function orgFilter(orgId) {
@@ -63,7 +63,7 @@ export async function getSettings(req, res) {
 
   res.json({
     name:                 org.name,
-    workingTime:          { hoursPerDay: wt.hoursPerDay ?? 7, workingDays, timezone: wt.timezone ?? "Asia/Karachi", holidays: readHolidays(wt.holidays) },
+    workingTime:          { hoursPerDay: wt.hoursPerDay ?? 7, workingDays, timezone: wt.timezone ?? "Asia/Karachi", holidays: readHolidays(wt.holidays), holidayNames: pruneHolidayNames(wt.holidayNames ?? {}, readHolidays(wt.holidays)), holidayList: holidayList(readHolidays(wt.holidays), wt.holidayNames ?? {}) },
     extensionRules:       org.extensionRules        ?? { extensionMaxDays: 3, extensionMaxPct: 20, extensionCumCapPct: 20 },
     alertSettings:        org.alertSettings         ?? {},
     aiSettings: {
@@ -101,6 +101,10 @@ async function validateSettings(body, cur, orgId) {
       else if (!wd.every((d) => Number.isInteger(d) && d >= 0 && d <= 6)) f["workingTime.workingDays"] = "Working days must be weekday numbers from 0 (Sunday) to 6 (Saturday).";
     }
     if (workingTime.timezone !== undefined && !validTimezone(workingTime.timezone)) f["workingTime.timezone"] = "Choose a valid time zone.";
+    if (workingTime.holidayNames !== undefined) { // QA4 B-33
+      const nameErr = holidayNamesError(workingTime.holidayNames, workingTime.holidays ?? readHolidays(cur.workingTime?.holidays));
+      if (nameErr) f["workingTime.holidayNames"] = nameErr;
+    }
     // F-001: holidays are real calendar dates "YYYY-MM-DD", at most 60, no duplicates.
     if (workingTime.holidays !== undefined) {
       const h = workingTime.holidays;
@@ -163,7 +167,11 @@ export async function updateSettings(req, res) {
 
   if (name !== undefined) org.name = String(name).trim().slice(0, 200);
 
-  if (workingTime         !== undefined) org.workingTime  = merge(cur.workingTime, workingTime);
+  if (workingTime         !== undefined) {
+    org.workingTime = merge(cur.workingTime, workingTime);
+    if (workingTime.holidayNames !== undefined) org.workingTime.holidayNames = workingTime.holidayNames; // replaced as a whole, so a cleared name stays cleared
+    org.workingTime.holidayNames = pruneHolidayNames(org.workingTime.holidayNames ?? {}, readHolidays(org.workingTime.holidays)); // a removed holiday loses its name
+  }
   if (extensionRules      !== undefined) org.extensionRules = merge(cur.extensionRules, extensionRules);
   if (alertSettings       !== undefined) org.alertSettings  = merge(cur.alertSettings, alertSettings);
   if (aiSettings          !== undefined) org.aiSettings     = merge(cur.aiSettings, aiSettings);

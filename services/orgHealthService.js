@@ -10,6 +10,7 @@ import { healthForProjects } from "./projectHealthService.js";
 import { orgWeekLoadPct } from "./capacity.js";
 import { deliveryScore, capacityScore, riskScore, combineFactors, explainFactors } from "./orgHealthRules.js";
 import { onTimeExpr } from "./onTimeRule.js";
+import { orgProjectScope } from "./directorScope.js";
 import { orgQualityFactor } from "./orgQuality.js";
 
 const IS_OID = /^[0-9a-f]{24}$/i;
@@ -25,7 +26,7 @@ export async function computeOrgHealth(orgId, now = new Date()) {
 
   // Delivery (RND-01): hours-weighted mean of project health over the same projects the Garden shows.
   const dirIds = (await User.find({ orgId: oid, role: "Director" }, "_id").lean()).map((d) => d._id);
-  const projects = await Project.find({ director: { $in: dirIds }, status: { $ne: "Deleted" } }, "startDate createdAt deadline").lean();
+  const projects = await Project.find({ ...(await orgProjectScope(oid)), status: { $ne: "Deleted" } }, "startDate createdAt deadline").lean();
   const [health, hoursAgg, doneWithDeadline] = await Promise.all([
     healthForProjects(projects, now),
     Task.aggregate([{ $match: { projectId: { $in: projects.map((p) => p._id) } } }, { $group: { _id: "$projectId", h: { $sum: { $ifNull: ["$estimatedHours", 0] } } } }]),

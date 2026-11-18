@@ -1,3 +1,4 @@
+import { orgProjectScope } from "../services/directorScope.js";
 import { orgWorkTime } from "../services/workloadRules.js";
 /**
  * GET /api/director/dues
@@ -23,7 +24,7 @@ export async function getDues(req, res) {
   const dirIds = directorIds.map((d) => d._id);
 
   const projects = await Project.find({
-    director: { $in: dirIds },
+    ...(await orgProjectScope(orgId)),
     status:   { $nin: ["Completed", "Archived", "Frozen", "Deleted"] },
     deadline: { $ne: null },
   })

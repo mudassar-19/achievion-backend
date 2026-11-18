@@ -42,3 +42,17 @@ export function pastEmployeesAccess(req) {
   if (!req?.org?.orgDbId) return { status: 401, error: "Org admin authentication required." };
   return null;
 }
+
+// QA4 A-3: rules for the Org admin's Account (password) and Organization (name) pages.
+export function orgPasswordError({ currentPassword, newPassword } = {}) {
+  if (!currentPassword) return "Enter your current password.";
+  if (typeof newPassword !== "string" || newPassword.length < 8) return "The new password must be at least 8 characters.";
+  if (newPassword === currentPassword) return "The new password must be different from the current one.";
+  return null;
+}
+export function orgNameError(name) {
+  const n = String(name ?? "").trim();
+  if (n.length < 2 || n.length > 80) return "The organization name must be between 2 and 80 characters.";
+  if (/[<>]/.test(n)) return "The organization name can only use letters, numbers and normal punctuation.";
+  return null;
+}

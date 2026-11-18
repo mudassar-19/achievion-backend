@@ -7,6 +7,8 @@ const auditLogSchema = new Schema(
       type:     String,
       required: [true, "Action is required"],
       enum:     [
+        // SEC M-6 (D-621, PROPOSED): who changed or reset a password is on record (no password, no code in the text)
+        "password_changed", "password_reset",
         // ── Employee & HR ───────────────────────────────────────────────────
         "role_change", "account_status_change", "account_deleted",
         "employee_created", "DIRECTOR_CREATED", "DIRECTOR_SETUP",

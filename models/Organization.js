@@ -101,9 +101,10 @@ const organizationSchema = new Schema(
 
     // ── Slice 3a settings fields ──────────────────────────────────────────────
     workingTime: {
-      hoursPerDay:  { type: Number, default: 8,       min: 4, max: 12 }, // RND-26: 4–12 step 0.5
+      hoursPerDay:  { type: Number, default: 7,       min: 4, max: 12 }, // SEC M-15: 7, like the settings screen, the engines and the docs // RND-26: 4–12 step 0.5
       workingDays:  { type: [Number], default: [1,2,3,4,5] }, // 0=Sun…6=Sat
       timezone:     { type: String,  default: "Asia/Karachi" }, // RND-19: org timezone for streak cron
+      holidayNames: { type: Schema.Types.Mixed, default: {} },          // QA4 B-33: { "YYYY-MM-DD": "Name" } for the holidays below
       holidays:     { type: [String], default: [] },            // F-001: "YYYY-MM-DD" days off (max 60), like a weekend for streaks, deadlines, capacity
     },
 

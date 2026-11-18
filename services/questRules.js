@@ -173,9 +173,9 @@ export function managerScopeError(body, own) {
   if (body.scope === "individual" && id && !own.userIds.includes(id)) return "Choose someone from your own projects.";
   return null;
 }
-// Design choice (ASSUMPTION): a Manager can promise at most this much XP per week in total (reward XP x people), so rewards cannot inflate XP.
-export const MANAGER_WEEKLY_XP_BUDGET = 3000;
-export const weeklyBudgetUsed = (quests, now = new Date()) => quests.filter((q) => q.publishedAt && +now - +new Date(q.publishedAt) <= 7 * 86_400_000)
-  .reduce((s, q) => s + (q.rewardXp ?? 0) * (q.participants?.length ?? q.participants ?? 0), 0);
+// Design choice (ASSUMPTION): the challenges a Manager has RUNNING at the same time can promise one person at most this much XP in total
+// (sum of their reward XP), so rewards cannot inflate XP. Finished challenges are already paid out and do not count.
+export const MANAGER_WEEKLY_XP_BUDGET = 1500;
+export const weeklyBudgetUsed = (running) => running.reduce((s, q) => s + (q.rewardXp ?? 0), 0);
 // A legendary badge is too rare to be handed out by a challenge.
 export const rewardBadgeEligible = (rarity) => rarity !== "legendary";

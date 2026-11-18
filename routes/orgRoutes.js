@@ -11,6 +11,7 @@ import {
   listOrgApprovals,
   listDeletedEmployees,
   listCustomRolesForOrg,
+  getOrgAccount, changeOrgPassword, getOrganization, updateOrganization,
 } from "../controllers/orgAdminController.js";
 import { orgDecisions } from "../controllers/decisionController.js";
 import { verifyOrgToken } from "../middleware/orgAuth.js";
@@ -26,6 +27,11 @@ router.post("/validate-invite", validateInvite);
 router.use(verifyOrgToken);
 
 router.get("/me",                          getOrgMe);
+// QA4 A-3: the Org admin's own Account and Organization pages
+router.get("/account",                     getOrgAccount);
+router.patch("/account/password",          changeOrgPassword);
+router.get("/organization",                getOrganization);
+router.patch("/organization",              updateOrganization);
 router.post("/setup-director",             setupDirector);
 router.get("/dashboard",                   getDashboard);
 
